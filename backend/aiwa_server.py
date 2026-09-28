@@ -317,4 +317,15 @@ if __name__ == "__main__":
     # is the only visible confirmation the user gets that it's actually
     # up rather than hung.
     print(f"Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
+    # Reported live: the first message of every fresh server start still
+    # pays claude's real ~20-30s cold-start cost, same as before the
+    # persistent-process change — unavoidable the FIRST time, but there
+    # is no reason to make the user sit through it AFTER they've already
+    # typed and sent something. Pre-warming it here, in the background,
+    # right as the server starts (which itself now starts automatically
+    # when the app opens — see TermuxLauncher.kt), means that cost
+    # mostly overlaps with the user opening the app and typing, instead
+    # of happening only once they've already hit "Envoyer". Backgrounded
+    # so it doesn't delay the HTTP server actually starting to listen.
+    threading.Thread(target=_ensure_process, daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

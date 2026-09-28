@@ -97,7 +97,23 @@ if(granted)launchTermuxBackend() else termuxPermissionLauncher.launch("com.termu
 // Termux (port already bound) without disturbing the one already up —
 // see backend/start.sh. The manual button stays too, for an explicit
 // retry after intentionally stopping the backend.
-LaunchedEffect(Unit){startTermuxBackend()}
+LaunchedEffect(Unit){
+// Reported live: "I have to restart the app to send the first
+// message" — a real bug, not just the (separate, expected) ~20-30s
+// cold-start wait. If the coroutine below sending a previous message
+// got torn down without reaching its own catch block (Activity
+// destroyed/recreated by Android while backgrounded, a config change,
+// etc.), AiwaRepository's status stayed WORKING forever — a
+// process-wide singleton, so it survives the Activity being recreated
+// and permanently disables "Envoyer" (enabled=status!=WORKING) until
+// the whole app PROCESS dies, which is the only thing that actually
+// resets it. A fresh screen appearing is never mid-user-action, so
+// any leftover WORKING here is stale by definition — safe to clear.
+if(AiwaRepository.state.value.status==AiwaState.Status.WORKING){
+AiwaRepository.update{it.copy(status=AiwaState.Status.READY)}
+}
+startTermuxBackend()
+}
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
 Text("AIWA",style=MaterialTheme.typography.headlineMedium)
 Box{
