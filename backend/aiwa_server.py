@@ -10,6 +10,17 @@ instant, since the real work runs in a background thread. The Android
 client (LocalClaudeBridge.kt) must poll this repeatedly until it sees a
 real "done" or "error" event — it used to fire exactly one GET, which is
 why streaming output never actually appeared.
+
+PERSISTENT PROCESS: one `claude` process is now kept alive across
+multiple messages instead of spawning a fresh one per /api/message —
+confirmed live that every single message paid a ~20-30s cold-start cost
+(proot overhead + Node.js startup) under the old one-process-per-message
+design, since claude was relaunched from scratch every single time.
+HONEST LIMIT going into this: whether claude's stream-json input mode
+really supports several user turns fed one at a time into the SAME live
+process (instead of exiting after the first, which is what closing
+stdin right after the one message used to do) was unverified — this
+file is the actual test of that assumption, not a guarantee.
 """
 import json
 import subprocess
@@ -22,13 +33,14 @@ from pathlib import Path
 def _ts():
     return time.strftime("%H:%M:%S")
 
+
 HOST = "127.0.0.1"
 PORT = 8787
-# How long a single `claude` invocation gets before this backend kills
-# it and gives up. This is a safety net against it hanging with no
-# output at all (reported live, likely tied to --resume specifically —
-# see run_claude) — without it, `busy` could stay stuck true forever,
-# permanently refusing every message after the one that got stuck.
+# How long a single turn gets before this backend gives up on it and
+# kills the underlying process. This is a safety net against a turn
+# hanging with no output at all — without it, `busy` could stay stuck
+# true forever, permanently refusing every message after the one that
+# got stuck.
 RESULT_TIMEOUT_S = 120
 
 events = []
@@ -38,8 +50,19 @@ busy = False
 # brand-new Claude Code session instead of --resume-ing anything".
 # Real ids come from either a real, on-disk session (see
 # list_real_sessions below) or from the session_id a fresh run's own
-# real "result" event reports back (see run_claude) — never invented.
+# real "result" event reports back — never invented.
 current_session = None
+# The one persistent claude process, or None if none is currently
+# running (nothing sent yet, it crashed, or a session switch killed it
+# deliberately — see /api/session below). Guarded by process_lock
+# rather than the general-purpose `lock` above, since starting/killing
+# it can take a moment and shouldn't block unrelated /api/events polls.
+process = None
+process_lock = threading.Lock()
+# The watchdog timer for whichever turn is currently in flight, so the
+# reader thread can cancel it the moment a real result arrives instead
+# of waiting out the full timeout every time. Guarded by `lock`.
+current_watchdog = None
 
 
 def emit(event):
@@ -94,112 +117,131 @@ def list_real_sessions(limit=20):
     return entries[:limit]
 
 
-def run_claude(text):
-    """Runs in its own daemon thread, one per /api/message — but only
-    one at a time system-wide (see the busy guard in do_POST): two
-    concurrent `claude` invocations against the same session could
-    otherwise interleave or conflict."""
-    global busy, current_session
-    saw_result = False
-    with lock:
-        session = current_session
+def _kill_process(proc):
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception as err:
+        print(f"[{_ts()}] _kill_process: ignoring {err!r} while killing pid={proc.pid}", flush=True)
+
+
+def _start_process(session):
     command = ["claude", "-p"]
     if session:
         command += ["--resume", session]
     command += ["--input-format", "stream-json", "--output-format", "stream-json",
                 "--include-partial-messages", "--verbose"]
-    # Diagnostic trace added live — two watchdog-based fixes in a row
-    # failed to actually stop "busy" getting stuck permanently after
-    # the first message, with no matching `claude` process even found
-    # running at the time. Rather than guess a fourth blind fix, this
-    # prints exactly what happens at each step so the real cause is
-    # directly visible in the server's own terminal instead of inferred.
-    print(f"[{_ts()}] run_claude: starting {command}", flush=True)
+    print(f"[{_ts()}] _start_process: {command}", flush=True)
+    proc = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1,
+    )
+    print(f"[{_ts()}] _start_process: pid={proc.pid} started", flush=True)
+    return proc
+
+
+def _reader_loop(proc):
+    """Runs for the WHOLE LIFETIME of one persistent claude process —
+    decoupled from any single message's turn, since the process now
+    outlives many messages instead of exiting after one. Each "result"
+    event ends the CURRENT turn (clears busy, cancels that turn's
+    watchdog) without touching the process itself, which stays open for
+    the next message."""
+    global busy, current_session, process, current_watchdog
     try:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-        )
-    except OSError as err:
-        print(f"[{_ts()}] run_claude: Popen FAILED: {err}", flush=True)
-        emit({"type": "error", "message": f"could not start claude: {err}"})
+        for line in proc.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                print(f"[{_ts()}] reader(pid={proc.pid}): non-JSON line: {line!r}", flush=True)
+                continue
+            print(f"[{_ts()}] reader(pid={proc.pid}): event type={event.get('type')!r}", flush=True)
+            if event.get("type") == "stream_event":
+                delta = event.get("event", {}).get("delta", {})
+                if delta.get("type") == "text_delta":
+                    emit({"type": "text", "text": delta.get("text", "")})
+            elif event.get("type") == "result":
+                # A fresh process (no --resume) only reveals its own
+                # real session id here — capturing it is what lets a
+                # LATER process (e.g. after a restart) --resume this
+                # same conversation; the current live process doesn't
+                # need it again, it already has full context loaded.
+                real_session_id = event.get("session_id")
+                if real_session_id:
+                    with lock:
+                        current_session = real_session_id
+                emit({"type": "done", "result": event.get("result", ""), "session_id": real_session_id})
+                with lock:
+                    busy = False
+                    if current_watchdog is not None:
+                        current_watchdog.cancel()
+                        current_watchdog = None
+    finally:
+        # The process exited — a crash, the watchdog killing it, or
+        # (untested territory) claude closing stdout on its own for
+        # some reason after all. Whatever turn was in flight, if any,
+        # gets a real, honest termination event instead of leaving the
+        # client polling forever with nothing, and this process is no
+        # longer usable for the next message — _ensure_process will
+        # start a fresh one.
+        returncode = proc.poll()
+        print(f"[{_ts()}] reader(pid={proc.pid}): loop ended, returncode={returncode}", flush=True)
+        with process_lock:
+            if process is proc:
+                process = None
+        with lock:
+            if busy:
+                busy = False
+                if current_watchdog is not None:
+                    current_watchdog.cancel()
+                    current_watchdog = None
+                emit({"type": "error", "message": f"claude exited unexpectedly (code {returncode}) mid-turn"})
+
+
+def _ensure_process():
+    """Returns a live persistent process, starting one if needed."""
+    global process
+    with process_lock:
+        if process is not None and process.poll() is None:
+            return process
+        with lock:
+            session = current_session
+        process = _start_process(session)
+        threading.Thread(target=_reader_loop, args=(process,), daemon=True).start()
+        return process
+
+
+def send_message(text):
+    """Writes one user turn to the persistent process's stdin — started
+    first if it's not already running — WITHOUT closing stdin
+    afterward. Closing stdin right after the one message is exactly
+    what used to signal claude "no more input coming, wrap up and
+    exit", which is why every single message needed a brand new
+    process (and paid its ~20-30s cold start) before this change."""
+    global busy, current_watchdog
+    proc = _ensure_process()
+    message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+    print(f"[{_ts()}] send_message: writing to pid={proc.pid}", flush=True)
+    try:
+        proc.stdin.write(json.dumps(message) + "\n")
+        proc.stdin.flush()
+    except (BrokenPipeError, OSError) as err:
+        print(f"[{_ts()}] send_message: write FAILED: {err}", flush=True)
+        emit({"type": "error", "message": f"could not send to claude: {err}"})
         with lock:
             busy = False
         return
-    print(f"[{_ts()}] run_claude: pid={process.pid} started", flush=True)
-    try:
-        message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
-        process.stdin.write(json.dumps(message) + "\n")
-        process.stdin.close()
-        # Reported live: breaking the loop on "result" (see below) was
-        # not enough on its own — every message after the first still
-        # got rejected as "busy" forever, even with that fix in place.
-        # The likely real cause: `claude -p --resume <session>` (only
-        # used from the SECOND message onward, once a real session
-        # exists) appears to sometimes hang and produce NO output at
-        # all — the plain first-message case (no --resume) worked fine.
-        # Without this watchdog, `for line in process.stdout` below
-        # blocks forever with nothing to read, `busy` never clears, and
-        # every later message is refused permanently. Killing the
-        # process after a bounded wait guarantees `busy` always clears
-        # and the client always gets a real, honest error either way,
-        # whatever the exact reason turns out to be.
-        def _on_timeout():
-            print(f"[{_ts()}] run_claude: WATCHDOG firing after {RESULT_TIMEOUT_S}s, killing pid={process.pid}", flush=True)
-            process.kill()
-        watchdog = threading.Timer(RESULT_TIMEOUT_S, _on_timeout)
-        watchdog.daemon = True
-        watchdog.start()
-        try:
-            for line in process.stdout:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    print(f"[{_ts()}] run_claude: non-JSON line: {line!r}", flush=True)
-                    continue
-                print(f"[{_ts()}] run_claude: event type={event.get('type')!r}", flush=True)
-                if event.get("type") == "stream_event":
-                    delta = event.get("event", {}).get("delta", {})
-                    if delta.get("type") == "text_delta":
-                        emit({"type": "text", "text": delta.get("text", "")})
-                elif event.get("type") == "result":
-                    saw_result = True
-                    # A fresh run (no --resume) only reveals its own real
-                    # session id here — capturing it is what lets the NEXT
-                    # message actually continue this same conversation
-                    # instead of starting yet another new one each time.
-                    real_session_id = event.get("session_id")
-                    if real_session_id:
-                        with lock:
-                            current_session = real_session_id
-                    emit({"type": "done", "result": event.get("result", ""), "session_id": real_session_id})
-                    # A "result" event IS claude's final output for a
-                    # one-shot -p invocation — nothing meaningful is left
-                    # to read once we have it, and claude doesn't
-                    # promptly close stdout on its own afterward.
-                    print(f"[{_ts()}] run_claude: got result event, breaking out of read loop", flush=True)
-                    break
-        finally:
-            watchdog.cancel()
-        print(f"[{_ts()}] run_claude: read loop ended (saw_result={saw_result}), waiting on process", flush=True)
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            print(f"[{_ts()}] run_claude: wait(timeout=5) expired, killing pid={process.pid}", flush=True)
-            process.kill()
-            process.wait()
-        print(f"[{_ts()}] run_claude: process exited with returncode={process.returncode}", flush=True)
-        # A crash or an early exit (bad session id, claude not on PATH
-        # inside PATH resolved differently, etc.) would otherwise leave
-        # the Android client polling forever with nothing to show —
-        # this is the one real, guaranteed termination event either way.
-        if not saw_result:
-            emit({"type": "error", "message": f"claude exited with code {process.returncode} before finishing (killed after {RESULT_TIMEOUT_S}s with no result if that code looks like a kill signal)"})
-    finally:
-        print(f"[{_ts()}] run_claude: clearing busy flag", flush=True)
-        with lock:
-            busy = False
+
+    def _on_timeout():
+        print(f"[{_ts()}] send_message: WATCHDOG firing after {RESULT_TIMEOUT_S}s, killing pid={proc.pid}", flush=True)
+        _kill_process(proc)
+
+    watchdog = threading.Timer(RESULT_TIMEOUT_S, _on_timeout)
+    watchdog.daemon = True
+    with lock:
+        current_watchdog = watchdog
+    watchdog.start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -228,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global busy, current_session
+        global busy, current_session, process
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -242,17 +284,25 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply_json({"accepted": False, "reason": "busy"})
                     return
                 busy = True
-            print(f"[{_ts()}] do_POST: accepting /api/message, spawning run_claude thread", flush=True)
-            threading.Thread(target=run_claude, args=(body,), daemon=True).start()
+            print(f"[{_ts()}] do_POST: accepting /api/message, spawning send_message thread", flush=True)
+            threading.Thread(target=send_message, args=(body,), daemon=True).start()
             self.reply_json({"accepted": True})
         elif self.path == "/api/session":
             # An empty body means "forget the current session — the
-            # next message starts a genuinely new one".
+            # next message starts a genuinely new one". Either way, the
+            # persistent process (if any) belongs to the OLD session's
+            # context, so it has to go — the next message starts a
+            # fresh one, --resume-ing the newly picked session if any.
             with lock:
                 if busy:
                     self.reply_json({"accepted": False, "reason": "busy"})
                     return
                 current_session = body.strip() or None
+            with process_lock:
+                if process is not None:
+                    print(f"[{_ts()}] /api/session: killing pid={process.pid} — session switched to {current_session!r}", flush=True)
+                    _kill_process(process)
+                    process = None
             self.reply_json({"accepted": True, "session": current_session})
         elif self.path == "/api/background":
             self.reply_json({"accepted": False, "reason": "not wired yet"})
