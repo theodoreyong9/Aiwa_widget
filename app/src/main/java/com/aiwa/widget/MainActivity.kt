@@ -64,7 +64,16 @@ if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permissi
 fun launchTermuxBackend(){
 val result=startAiwaBackendViaTermux(context)
 AiwaRepository.update{
-if(result.isSuccess)it.copy(status=AiwaState.Status.WORKING,output="Démarrage de Termux en arrière-plan…")
+// Reported live: using WORKING here left the "Envoyer" button
+// permanently disabled (enabled=status!=WORKING), because nothing
+// ever clears it afterward — there's no real signal for "Termux
+// actually finished starting the server", only whether the
+// launch intent itself was accepted. WORKING must stay reserved
+// for an actual in-flight Claude request (see the send button's
+// own coroutine below); this only ever reports acceptance, so it
+// keeps status READY and lets the user just try sending — a
+// connection error there is the real, honest signal either way.
+if(result.isSuccess)it.copy(status=AiwaState.Status.READY,output="Termux démarré en arrière-plan — laisse-lui quelques secondes puis essaie d'envoyer un message.")
 else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
 }
 refreshWidget()

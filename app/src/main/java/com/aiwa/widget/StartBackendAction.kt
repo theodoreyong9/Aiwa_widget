@@ -15,8 +15,13 @@ class StartBackendAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val result = startAiwaBackendViaTermux(context)
         AiwaRepository.update {
+            // Same fix as MainActivity's identical button: WORKING must
+            // stay reserved for an actual in-flight Claude request — it
+            // permanently disabled the app's "Envoyer" button here,
+            // since nothing ever clears it after a fire-and-forget
+            // launch with no real completion signal.
             if (result.isSuccess) {
-                it.copy(status = AiwaState.Status.WORKING, output = "Démarrage de Termux en arrière-plan…")
+                it.copy(status = AiwaState.Status.READY, output = "Termux démarré en arrière-plan — laisse-lui quelques secondes puis essaie d'envoyer un message.")
             } else {
                 it.copy(status = AiwaState.Status.ERROR, output = "Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
             }
