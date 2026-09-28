@@ -1,0 +1,6 @@
+package com.aiwa.bridge
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import java.net.HttpURLConnection
+import java.net.URI
+class LocalClaudeBridge(private val baseUrl:String="http://127.0.0.1:8787"):ClaudeBridge{override fun sendMessage(text:String):Flow<String>=flow{val post=URI("$baseUrl/api/message").toURL().openConnection() as HttpURLConnection;post.requestMethod="POST";post.doOutput=true;post.setRequestProperty("Content-Type","text/plain; charset=utf-8");post.outputStream.use{it.write(text.toByteArray())};post.inputStream.close();val events=URI("$baseUrl/api/events").toURL().openConnection() as HttpURLConnection;events.inputStream.bufferedReader().useLines{ls->ls.forEach{line->if(line.isNotBlank())emit(line)}}};override suspend fun sendBackgroundInstruction(text:String){val c=URI("$baseUrl/api/background").toURL().openConnection() as HttpURLConnection;c.requestMethod="POST";c.doOutput=true;c.setRequestProperty("Content-Type","text/plain; charset=utf-8");c.outputStream.use{it.write(text.toByteArray())};c.inputStream.close()};override suspend fun listSessions():List<String>{val c=URI("$baseUrl/api/sessions").toURL().openConnection() as HttpURLConnection;return c.inputStream.bufferedReader().readLines().filter{it.isNotBlank()}}}
