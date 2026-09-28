@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -191,13 +192,19 @@ Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
 // session/mic/response (explicit request for a minimal design), so it
 // no longer has its own separate start-backend button either —
 // StartBackendAction.kt was removed as dead code.
-OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMaxWidth(),label={Text("Message")})
-Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
+// Reported live: "je les veux à droite du champ écrire, pas invisible
+// quand le clavier s'ouvre" — the mic/send buttons used to sit in
+// their own Row BELOW the full-width text field, which the keyboard
+// could push off-screen entirely while typing. Same Row as the field
+// now, field taking the remaining width via weight(1f), so the
+// buttons stay next to it and visible regardless of the keyboard.
+Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
+OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.weight(1f),label={Text("Message")})
 Button(onClick={startDictation()}){Text("🎙️")}
 Button(enabled=state.status!=AiwaState.Status.WORKING,onClick={
 doSend(input)
 input=""
-}){Text("➤ Envoyer")}
+}){Text("➤")}
 // "Fond" (background instruction) is deliberately not exposed here:
 // the backend's own /api/background always rejects it
 // ({"accepted": false, "reason": "not wired yet"}) until its real
