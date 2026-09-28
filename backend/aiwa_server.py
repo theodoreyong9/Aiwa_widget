@@ -14,8 +14,13 @@ why streaming output never actually appeared.
 import json
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+def _ts():
+    return time.strftime("%H:%M:%S")
 
 HOST = "127.0.0.1"
 PORT = 8787
@@ -103,6 +108,13 @@ def run_claude(text):
         command += ["--resume", session]
     command += ["--input-format", "stream-json", "--output-format", "stream-json",
                 "--include-partial-messages", "--verbose"]
+    # Diagnostic trace added live — two watchdog-based fixes in a row
+    # failed to actually stop "busy" getting stuck permanently after
+    # the first message, with no matching `claude` process even found
+    # running at the time. Rather than guess a fourth blind fix, this
+    # prints exactly what happens at each step so the real cause is
+    # directly visible in the server's own terminal instead of inferred.
+    print(f"[{_ts()}] run_claude: starting {command}", flush=True)
     try:
         process = subprocess.Popen(
             command,
@@ -110,10 +122,12 @@ def run_claude(text):
             text=True, bufsize=1,
         )
     except OSError as err:
+        print(f"[{_ts()}] run_claude: Popen FAILED: {err}", flush=True)
         emit({"type": "error", "message": f"could not start claude: {err}"})
         with lock:
             busy = False
         return
+    print(f"[{_ts()}] run_claude: pid={process.pid} started", flush=True)
     try:
         message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
         process.stdin.write(json.dumps(message) + "\n")
@@ -131,7 +145,10 @@ def run_claude(text):
         # process after a bounded wait guarantees `busy` always clears
         # and the client always gets a real, honest error either way,
         # whatever the exact reason turns out to be.
-        watchdog = threading.Timer(RESULT_TIMEOUT_S, process.kill)
+        def _on_timeout():
+            print(f"[{_ts()}] run_claude: WATCHDOG firing after {RESULT_TIMEOUT_S}s, killing pid={process.pid}", flush=True)
+            process.kill()
+        watchdog = threading.Timer(RESULT_TIMEOUT_S, _on_timeout)
         watchdog.daemon = True
         watchdog.start()
         try:
@@ -139,7 +156,9 @@ def run_claude(text):
                 try:
                     event = json.loads(line)
                 except ValueError:
+                    print(f"[{_ts()}] run_claude: non-JSON line: {line!r}", flush=True)
                     continue
+                print(f"[{_ts()}] run_claude: event type={event.get('type')!r}", flush=True)
                 if event.get("type") == "stream_event":
                     delta = event.get("event", {}).get("delta", {})
                     if delta.get("type") == "text_delta":
@@ -159,14 +178,18 @@ def run_claude(text):
                     # one-shot -p invocation — nothing meaningful is left
                     # to read once we have it, and claude doesn't
                     # promptly close stdout on its own afterward.
+                    print(f"[{_ts()}] run_claude: got result event, breaking out of read loop", flush=True)
                     break
         finally:
             watchdog.cancel()
+        print(f"[{_ts()}] run_claude: read loop ended (saw_result={saw_result}), waiting on process", flush=True)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
+            print(f"[{_ts()}] run_claude: wait(timeout=5) expired, killing pid={process.pid}", flush=True)
             process.kill()
             process.wait()
+        print(f"[{_ts()}] run_claude: process exited with returncode={process.returncode}", flush=True)
         # A crash or an early exit (bad session id, claude not on PATH
         # inside PATH resolved differently, etc.) would otherwise leave
         # the Android client polling forever with nothing to show —
@@ -174,6 +197,7 @@ def run_claude(text):
         if not saw_result:
             emit({"type": "error", "message": f"claude exited with code {process.returncode} before finishing (killed after {RESULT_TIMEOUT_S}s with no result if that code looks like a kill signal)"})
     finally:
+        print(f"[{_ts()}] run_claude: clearing busy flag", flush=True)
         with lock:
             busy = False
 
@@ -214,9 +238,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/message":
             with lock:
                 if busy:
+                    print(f"[{_ts()}] do_POST: REJECTING /api/message — busy is already True", flush=True)
                     self.reply_json({"accepted": False, "reason": "busy"})
                     return
                 busy = True
+            print(f"[{_ts()}] do_POST: accepting /api/message, spawning run_claude thread", flush=True)
             threading.Thread(target=run_claude, args=(body,), daemon=True).start()
             self.reply_json({"accepted": True})
         elif self.path == "/api/session":

@@ -125,7 +125,12 @@ catch(err:Exception){reportError(err)}
 }
 Text(statusLabel(state.status))
 Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
-Button(onClick={startTermuxBackend()}){Text("▶ Démarrer le backend (Termux)")}
+// The explicit button here became redundant once LaunchedEffect above
+// started firing the same launch automatically on every app open —
+// reported live as a fair "might as well remove it" once that was
+// confirmed. The widget's own "▶" (StartBackendAction.kt) stays: it
+// has real, different value, letting the backend start from the home
+// screen without ever opening the app at all.
 OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMaxWidth(),label={Text("Message")})
 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
 Button(onClick={startDictation()}){Text("🎙️")}
