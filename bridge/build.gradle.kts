@@ -4,7 +4,7 @@ plugins {
 }
 android {
     namespace = "com.aiwa.bridge"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig { minSdk = 26 }
 }
 dependencies {

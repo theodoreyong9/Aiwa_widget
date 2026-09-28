@@ -1,2 +1,32 @@
 package com.aiwa.widget
-data class AiwaState(val session:String="Aiwa",val status:Status=Status.READY,val output:String="",val question:String?=null){enum class Status{READY,WORKING,WAITING,DONE,ERROR}}
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+data class AiwaState(
+    val session: String = "Aiwa",
+    val status: Status = Status.READY,
+    val output: String = "",
+    val question: String? = null,
+) {
+    enum class Status { READY, WORKING, WAITING, DONE, ERROR }
+}
+
+/**
+ * The one real, process-wide source of truth MainActivity's own Compose
+ * UI and the home-screen widget both read from. They run in the same
+ * process (no android:process override in the manifest) but are
+ * otherwise unconnected — Glance only re-renders when explicitly told
+ * to via AiwaWidget().updateAll(context), never just because some
+ * unrelated Compose state changed elsewhere in the process. Every real
+ * mutation here is meant to be followed by a real updateAll() call —
+ * see MainActivity's own use of this for the pattern.
+ */
+object AiwaRepository {
+    private val _state = MutableStateFlow(AiwaState())
+    val state: StateFlow<AiwaState> = _state
+
+    fun update(transform: (AiwaState) -> AiwaState) {
+        _state.value = transform(_state.value)
+    }
+}
