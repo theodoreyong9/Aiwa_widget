@@ -23,6 +23,20 @@ else
   git clone https://github.com/theodoreyong9/aiwa_widget "$REPO_DIR"
 fi
 
+# The widget/app's "▶ Démarrer" button needs Termux's own separate
+# opt-in for RUN_COMMAND (reported live: "Need allow external apps in
+# termux properties files") — a real security gate of Termux's own,
+# off by default, that no manifest permission on Aiwa's side can grant
+# on its own. Folding it in here means it's set the same one time as
+# everything else instead of a manual edit the user has to remember.
+echo "== Allowing Aiwa to trigger Termux commands (RUN_COMMAND) =="
+mkdir -p "$HOME/.termux"
+PROPS="$HOME/.termux/termux.properties"
+if ! grep -q "^allow-external-apps *= *true" "$PROPS" 2>/dev/null; then
+  echo "allow-external-apps=true" >> "$PROPS"
+  termux-reload-settings || true
+fi
+
 # Folds the APK install/update into this same one command, instead of
 # needing a separate manual "open GitHub in a browser, download,
 # install" step — reported live as an actual usability complaint.
