@@ -13,7 +13,10 @@ set -euo pipefail
 DISTRO=ubuntu
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if ! proot-distro list --installed 2>/dev/null | grep -q "^$DISTRO"; then
+# Same functional login check as setup-termux-proot.sh, not a text
+# parse of `proot-distro list --installed` — that parse turned out
+# unreliable (see setup-termux-proot.sh's own comment on this).
+if ! proot-distro login "$DISTRO" -- true >/dev/null 2>&1; then
   echo "Ubuntu isn't installed yet — run bootstrap.sh by hand once first:"
   echo "  curl -fsSL https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/backend/bootstrap.sh | bash"
   exit 1

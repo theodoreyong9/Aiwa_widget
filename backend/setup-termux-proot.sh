@@ -27,10 +27,22 @@ pkg update -y
 pkg install -y proot-distro
 
 echo "== Installing Ubuntu inside proot-distro (large download, first time only) =="
-if proot-distro list --installed 2>/dev/null | grep -q "^$DISTRO"; then
+# Checking via `proot-distro list --installed` and grepping for the
+# distro name turned out unreliable in practice — reported live: the
+# script tried to install anyway and crashed on proot-distro's own
+# "container 'ubuntu' already exists" error, meaning that check's
+# output-parsing didn't recognize an install that was already there.
+# Testing whether we can actually log in is a direct functional check
+# instead of depending on `list`'s exact text format.
+if proot-distro login "$DISTRO" -- true >/dev/null 2>&1; then
   echo "$DISTRO already installed — skipping."
 else
-  proot-distro install "$DISTRO"
+  proot-distro install "$DISTRO" || true
+  if ! proot-distro login "$DISTRO" -- true >/dev/null 2>&1; then
+    echo "Ubuntu container looks broken or only half-installed."
+    echo "Run 'proot-distro reset $DISTRO' by hand, then re-run this script."
+    exit 1
+  fi
 fi
 
 echo "== Installing Node.js, Python, and the Claude Code CLI INSIDE $DISTRO =="
