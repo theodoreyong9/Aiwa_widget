@@ -201,4 +201,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # serve_forever() itself never prints anything — reported live as
+    # "nothing happens after 'Leave this running...'", which was in
+    # fact the server working correctly, just silently. This one line
+    # is the only visible confirmation the user gets that it's actually
+    # up rather than hung.
+    print(f"Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
