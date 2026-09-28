@@ -23,4 +23,23 @@ else
   git clone https://github.com/theodoreyong9/aiwa_widget "$REPO_DIR"
 fi
 
+# Folds the APK install/update into this same one command, instead of
+# needing a separate manual "open GitHub in a browser, download,
+# install" step — reported live as an actual usability complaint.
+# Android still requires a real, explicit tap on its own installer
+# prompt for a sideloaded APK (termux-open just hands off to that
+# system UI, it cannot silently install anything on its own — the same
+# kind of real OS security gate as the RUN_COMMAND permission
+# elsewhere in this project), so this can prompt but not finish the
+# install unattended.
+echo "== Downloading the latest Aiwa APK =="
+APK_PATH="$HOME/aiwa-debug.apk"
+if curl -fsSL -o "$APK_PATH" https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/aiwa-debug.apk; then
+  pkg install -y termux-api >/dev/null 2>&1 || true
+  echo "== Opening the Android installer — tap Install/Update when it appears =="
+  termux-open "$APK_PATH" || echo "Could not open the installer automatically (install the Termux:API app for this to work) — open $APK_PATH by hand from a file manager instead."
+else
+  echo "Could not download the APK (network issue?) — skipping. You can install it by hand later from https://github.com/theodoreyong9/aiwa_widget/raw/main/aiwa-debug.apk"
+fi
+
 exec bash "$REPO_DIR/backend/setup-termux-proot.sh"
