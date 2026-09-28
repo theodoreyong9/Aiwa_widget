@@ -82,6 +82,14 @@ catch(err:Exception){reportError(err)}
 }
 Text(statusLabel(state.status))
 Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
+Button(onClick={
+val result=startAiwaBackendViaTermux(context)
+AiwaRepository.update{
+if(result.isSuccess)it.copy(status=AiwaState.Status.WORKING,output="Démarrage de Termux en arrière-plan…")
+else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
+}
+refreshWidget()
+}){Text("▶ Démarrer le backend (Termux)")}
 OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMaxWidth(),label={Text("Message")})
 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
 Button(onClick={startDictation()}){Text("🎙️")}
