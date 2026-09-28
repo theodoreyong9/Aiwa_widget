@@ -18,6 +18,14 @@ pkg update -y
 pkg install -y nodejs python
 
 echo "== Installing the Claude Code CLI =="
+# This npm's own "install-scripts" gate blocks the package's postinstall
+# by default — which is exactly what downloads claude's real native
+# binary — leaving a `claude` file on PATH that exists but doesn't
+# work ("claude native binary not installed"). Pre-allowing it here
+# means the install below actually gets a working binary the first
+# time; `|| true` because older npm versions don't have this config key
+# at all, and that must not be fatal under set -e.
+npm config set allow-scripts=@anthropic-ai/claude-code --location=user 2>/dev/null || true
 # --force: re-running this script (e.g. to update, or after this exact
 # script previously succeeded) hits a real npm quirk otherwise — a
 # global bin symlink from the prior install already exists on disk, and
@@ -31,6 +39,14 @@ if ! command -v claude >/dev/null 2>&1; then
   echo "name may have changed. Check https://docs.claude.com/claude-code"
   echo "for the current install instructions, then re-run this script."
   exit 1
+fi
+
+if ! claude --version >/dev/null 2>&1; then
+  echo "claude is on PATH but not actually working yet (its postinstall"
+  echo "was skipped despite the config above, or downloaded nothing) —"
+  echo "running its own real postinstall directly."
+  GLOBAL_NODE_MODULES="$(npm root -g)"
+  node "$GLOBAL_NODE_MODULES/@anthropic-ai/claude-code/install.cjs"
 fi
 
 echo "== Logging into Claude Code (only needed once; follow its own prompts) =="
