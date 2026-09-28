@@ -18,13 +18,6 @@ import androidx.glance.text.*
 import androidx.glance.unit.*
 import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.SessionInfo
-// Read back by MainActivity as a plain Intent extra (Glance's
-// actionStartActivity bundles ActionParameters straight into the
-// launched Intent's extras under this same key name) — reported live:
-// the mic got folded away into a generic "open" button by mistake; it
-// needed to stay its own real affordance, and this is what lets
-// tapping it go straight into dictation instead of a blank screen.
-val AutoDictateKey = androidx.glance.action.ActionParameters.Key<Boolean>("autoDictate")
 class AiwaWidget:GlanceAppWidget(){override suspend fun provideGlance(context:Context,id:GlanceId){
 // Glance re-renders only when told to (updateAll()), not reactively —
 // a plain synchronous snapshot of the shared AiwaRepository here is
@@ -64,11 +57,13 @@ Text(preview.take(80),style=TextStyle(color=rgb(android.graphics.Color.LTGRAY),f
 // (mic/keyboard/send) that all did the exact same single thing —
 // open the app — with no real difference between them. Collapsing
 // them all away was a mistake (reported live too) — the mic is its
-// own real, distinct affordance (opens the app straight into
-// dictation via AutoDictateKey below, see MainActivity.kt) and stays.
-// Typing still genuinely needs the app either way (no text input
-// field can live directly in a widget — a hard Android platform
-// limit), so keyboard/send collapse into one generic "Ouvrir".
+// own real, distinct affordance and stays, now launching
+// DictateActivity directly (a real, invisible trampoline — see that
+// file — so the system recognizer appears immediately instead of
+// opening Aiwa's own UI first). Typing still genuinely needs the app
+// either way (no text input field can live directly in a widget — a
+// hard Android platform limit), so keyboard/send collapse into one
+// generic "Ouvrir".
 if(sessions.isNotEmpty()){
 Spacer(GlanceModifier.height(8.dp))
 Text("Sessions :",style=TextStyle(color=rgb(android.graphics.Color.LTGRAY),fontSize=11.sp))
@@ -86,7 +81,7 @@ modifier=GlanceModifier.fillMaxWidth().padding(vertical=3.dp)
 Spacer(GlanceModifier.height(8.dp))
 Row{
 Text("▶",modifier=GlanceModifier.padding(6.dp).clickable(actionRunCallback<StartBackendAction>()))
-Text("🎙️",modifier=GlanceModifier.padding(6.dp).clickable(actionStartActivity<MainActivity>(parameters=actionParametersOf(AutoDictateKey to true))))
+Text("🎙️",modifier=GlanceModifier.padding(6.dp).clickable(actionStartActivity<DictateActivity>()))
 Text("💬 Ouvrir",modifier=GlanceModifier.padding(6.dp).clickable(actionStartActivity<MainActivity>()))
 }
 }

@@ -20,19 +20,12 @@ import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.launch
-class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState)
-// The widget's own 🎙️ passes this extra (see AiwaWidget.kt's
-// AutoDictateKey) so tapping it from the home screen goes straight
-// into dictation instead of just opening the app to a blank screen —
-// restoring the mic as its own real affordance, not folded into a
-// generic "open" button.
-val autoDictate=intent?.getBooleanExtra("autoDictate",false)?:false
-setContent{MaterialTheme{AiwaScreen(autoDictate)}}}}
+class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{MaterialTheme{AiwaScreen()}}}}
 // "Travail…" alone left every message looking stuck for the first
 // 20-30s (claude's real, confirmed cold-start delay before its first
 // token) — this sets the right expectation instead of looking hung.
 private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Travail… (jusqu'à 30s, patiente)";AiwaState.Status.WAITING->"En attente de réponse";AiwaState.Status.DONE->"Terminé";AiwaState.Status.ERROR->"Erreur"}
-@Composable private fun AiwaScreen(autoDictate:Boolean=false){
+@Composable private fun AiwaScreen(){
 val context=LocalContext.current
 val bridge=remember{LocalClaudeBridge()}
 val scope=rememberCoroutineScope()
@@ -104,10 +97,6 @@ fun startDictation(){
 val granted=ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
 if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 }
-// Tapping the widget's own 🎙️ (see AiwaWidget.kt) opens this Activity
-// with autoDictate=true so it goes straight into dictation instead of
-// landing on a blank screen requiring yet another tap.
-LaunchedEffect(autoDictate){if(autoDictate)startDictation()}
 // Reported live: "Not allowed to start service Intent ... without
 // permission com.termux.permission.RUN_COMMAND" — declaring the
 // permission in the manifest was never enough on its own; like
