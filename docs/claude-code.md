@@ -2,9 +2,7 @@
 
 Verified development transport: Claude Code 2.1.282 with `--resume`, stream-json input/output, partial messages and verbose mode.
 
-Development session: `8aab65ab-182b-40ab-b163-30338c87d2f5`.
-
-Production must replace the hard-coded ID with a controlled session selector. Background instruction remains deliberately unimplemented until its supported transport is verified.
+The hard-coded development session id this originally shipped with (`8aab65ab-182b-40ab-b163-30338c87d2f5`) is gone — `current_session` in `aiwa_server.py` now starts as `None` (a real, brand-new session on the first message) and is set either by a real pick from `/api/sessions` (which lists actual `~/.claude/projects/**/*.jsonl` transcripts) or automatically from a fresh run's own real `result.session_id`. Background instruction remains deliberately unimplemented until its supported transport is verified — see below.
 
 ## `/api/events` is a poll-and-clear queue, not a live stream
 
@@ -20,8 +18,8 @@ GET, immediately.
 
 The backend also now guards against a second `/api/message` while one
 is running (`busy`, checked and set under the same lock as the event
-queue) — two concurrent `claude --resume SESSION` invocations against
-the same session id could otherwise interleave or conflict. A rejected
+queue) — two concurrent `claude` invocations against the same session
+id could otherwise interleave or conflict. A rejected
 POST returns `{"accepted": false, "reason": "busy"}`; the bridge treats
 any non-`accepted:true` response as a real error rather than silently
 proceeding.

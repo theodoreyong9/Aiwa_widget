@@ -10,24 +10,41 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
 
 private const val POLL_INTERVAL_MS = 150L
 private const val POLL_TIMEOUT_MS = 5 * 60_000L
 
 class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") : ClaudeBridge {
 
-    private fun postText(path: String, text: String): String {
+    // A raw ConnectException's own message ("Failed to connect to
+    // /127.0.0.1:8787") is Android/Java plumbing, not something that
+    // tells anyone what to actually do about it. This is far and away
+    // the single most common failure mode of this whole bridge (no
+    // server code here starts aiwa_server.py — see README's "Running
+    // this for real"), so it gets a real, actionable message instead of
+    // letting the raw exception surface as-is.
+    private fun <T> withClearConnectionError(block: () -> T): T = try {
+        block()
+    } catch (err: java.net.ConnectException) {
+        throw IllegalStateException(
+            "Backend not reachable at $baseUrl — it isn't started. Run `python3 backend/aiwa_server.py` on THIS device first (see README's \"Running this for real\").",
+            err,
+        )
+    }
+
+    private fun postText(path: String, text: String): String = withClearConnectionError {
         val connection = URI("$baseUrl$path").toURL().openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.doOutput = true
         connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
         connection.outputStream.use { it.write(text.toByteArray()) }
-        return connection.inputStream.bufferedReader().use { it.readText() }
+        connection.inputStream.bufferedReader().use { it.readText() }
     }
 
-    private fun getText(path: String): String {
+    private fun getText(path: String): String = withClearConnectionError {
         val connection = URI("$baseUrl$path").toURL().openConnection() as HttpURLConnection
-        return connection.inputStream.bufferedReader().use { it.readText() }
+        connection.inputStream.bufferedReader().use { it.readText() }
     }
 
     /**
@@ -72,8 +89,21 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         Unit
     }
 
-    override suspend fun listSessions(): List<String> = withContext(Dispatchers.IO) {
+    override suspend fun listSessions(): List<SessionInfo> = withContext(Dispatchers.IO) {
         val array = JSONArray(getText("/api/sessions"))
-        (0 until array.length()).map { array.getString(it) }
+        (0 until array.length()).map {
+            val entry = array.getJSONObject(it)
+            SessionInfo(id = entry.getString("id"), preview = entry.optString("preview", entry.getString("id")))
+        }
+    }
+
+    override suspend fun selectSession(id: String?) = withContext(Dispatchers.IO) {
+        postText("/api/session", id ?: "")
+        Unit
+    }
+
+    override suspend fun currentSessionId(): String? = withContext(Dispatchers.IO) {
+        val status = JSONObject(getText("/api/status"))
+        if (status.isNull("session")) null else status.optString("session").ifEmpty { null }
     }
 }
