@@ -86,6 +86,15 @@ fun startTermuxBackend(){
 val granted=ContextCompat.checkSelfPermission(context,"com.termux.permission.RUN_COMMAND")==PackageManager.PERMISSION_GRANTED
 if(granted)launchTermuxBackend() else termuxPermissionLauncher.launch("com.termux.permission.RUN_COMMAND")
 }
+// Reported live as a genuine usability question: "is tapping this
+// button every time mandatory, why isn't it automatic?" — it can be:
+// firing this once when the screen first appears removes the manual
+// step entirely on every later app open. If the backend is already
+// running, the fresh attempt this fires just fails harmlessly inside
+// Termux (port already bound) without disturbing the one already up —
+// see backend/start.sh. The manual button stays too, for an explicit
+// retry after intentionally stopping the backend.
+LaunchedEffect(Unit){startTermuxBackend()}
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
 Text("AIWA",style=MaterialTheme.typography.headlineMedium)
 Box{
@@ -127,7 +136,15 @@ AiwaRepository.update{it.copy(status=AiwaState.Status.WORKING,output="")}
 refreshWidget()
 try{
 bridge.sendMessage(text).collect{chunk->AiwaRepository.update{it.copy(output=it.output+chunk)}}
-AiwaRepository.update{it.copy(status=AiwaState.Status.DONE)}
+// Reported live as confusing: the app kept showing the "Aiwa"
+// placeholder label forever, so the real backend-assigned
+// conversation id (which DOES persist correctly — see
+// current_session in aiwa_server.py) was never visible anywhere in
+// the app, only ever in the picker's own list. Surfacing it here,
+// once a message actually completes, makes the displayed session
+// reflect reality instead of a name that was never real.
+val realSessionId=try{bridge.currentSessionId()}catch(err:Exception){null}
+AiwaRepository.update{it.copy(status=AiwaState.Status.DONE,session=realSessionId?.take(8)?:it.session)}
 }catch(err:Exception){
 reportError(err)
 }
