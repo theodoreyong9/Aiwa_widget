@@ -5,18 +5,27 @@
 # linux-arm64-android at all (confirmed live: "Native binaries for
 # linux-arm64-android are not available on this release channel" —
 # Anthropic's own upstream distribution, nothing this repo can patch).
-# Termux's own Node.js build appears to be the thing reporting
-# "android" as the platform in the first place (Node's own
-# process.platform never natively returns "android" — this is almost
-# certainly a Termux-specific patch to its packaged Node). The
-# workaround: run a REAL Ubuntu userland inside Termux via proot-distro
-# (no network namespace, so 127.0.0.1 here is genuinely the same
-# loopback the Aiwa app itself uses) and install a normal, unpatched
-# Node.js inside THAT — which should report plain linux/arm64, a
-# platform Anthropic does publish a real binary for. This does not
-# change the actual kernel (still Android's own — proot is filesystem/
-# syscall sandboxing, not virtualization), only the userland Node
-# build, which is the part that matters here.
+#
+# The original theory here was that Termux's OWN Node.js build was
+# specifically patched to report platform "android", and that a plain
+# Ubuntu userland inside proot-distro plus a vanilla NodeSource Node
+# would report plain "linux" instead. Confirmed live to be WRONG (or at
+# least incomplete): even after this script's own Node "install" step,
+# `proot-distro login ubuntu -- node -e "console.log(process.platform)"`
+# still printed "android", with ANDROID_ROOT=/system and
+# ANDROID_DATA=/data also visible inside that login shell. proot does
+# not virtualize the kernel (it's filesystem/syscall sandboxing only),
+# and — confirmed live — `proot-distro login` does not reset PATH or
+# Android-specific env vars inherited from the outer Termux process
+# either. Combined, that means `command -v node` below was finding
+# TERMUX'S OWN node binary (still reachable via the leaked PATH), so
+# the "already installed" check skipped installing a real one inside
+# Ubuntu at all — not a kernel-visibility problem, an environment-leak
+# problem. Fixed by forcing a clean PATH and clearing the Android-
+# specific vars for this login, and by checking node's actual reported
+# platform instead of just its presence on PATH (command -v alone
+# already burned us once before, for `claude --version` vs. `command -v
+# claude` — same class of mistake, now fixed here too).
 set -euo pipefail
 
 DISTRO=ubuntu
@@ -48,14 +57,38 @@ fi
 echo "== Installing Node.js, Python, and the Claude Code CLI INSIDE $DISTRO =="
 # Ubuntu's own apt Node.js is usually too old for the Claude Code CLI —
 # NodeSource's setup script is the standard way to get a modern one.
-proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- bash -c '
+# `env -u ...` + a forced PATH below strip the Android-specific vars
+# and Termux's own bin dir that were confirmed live to leak into this
+# login shell otherwise (see the file header comment for the full
+# story) — without this, `command -v node` finds Termux's own node
+# instead of installing a real one inside Ubuntu.
+proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- \
+  env -u ANDROID_ROOT -u ANDROID_DATA -u ANDROID_ASSETS -u ANDROID_STORAGE \
+      -u ANDROID_ART_ROOT -u ANDROID_I18N_ROOT -u ANDROID_TZDATA_ROOT \
+      -u ANDROID_RUNTIME_ROOT -u BOOTCLASSPATH -u DEX2OATBOOTCLASSPATH \
+      -u EXTERNAL_STORAGE \
+      PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  bash -c '
 set -euo pipefail
 apt-get update -y
 apt-get install -y curl python3
-if ! command -v node >/dev/null 2>&1; then
+
+node_is_real_linux() {
+  command -v node >/dev/null 2>&1 && [ "$(node -p process.platform 2>/dev/null)" = "linux" ]
+}
+
+if ! node_is_real_linux; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
   apt-get install -y nodejs
 fi
+
+if ! node_is_real_linux; then
+  echo "node still does not report platform=linux after installing — something is still leaking through:"
+  command -v node || echo "(no node on PATH at all)"
+  node -p process.platform || true
+  exit 1
+fi
+
 npm config set allow-scripts=@anthropic-ai/claude-code --location=user 2>/dev/null || true
 npm install -g @anthropic-ai/claude-code --force
 if ! claude --version >/dev/null 2>&1; then
