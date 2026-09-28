@@ -132,7 +132,21 @@ def run_claude(text):
                     with lock:
                         current_session = real_session_id
                 emit({"type": "done", "result": event.get("result", ""), "session_id": real_session_id})
-        process.wait()
+                # Reported live: every message after the first got
+                # rejected as "busy" forever. Root cause: a "result"
+                # event IS claude's final output for a one-shot -p
+                # invocation, but this loop kept reading `process.stdout`
+                # waiting for more lines that never came — claude
+                # apparently doesn't promptly close stdout after
+                # printing its result — so `finally: busy = False` below
+                # never ran. Nothing meaningful is left to read once we
+                # have the result.
+                break
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
         # A crash or an early exit (bad session id, claude not on PATH
         # inside PATH resolved differently, etc.) would otherwise leave
         # the Android client polling forever with nothing to show —
