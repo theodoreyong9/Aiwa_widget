@@ -82,6 +82,17 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             }
             throw IllegalStateException("message not accepted: $acceptedRaw")
         }
+        // Reported live: the caller used to reset its own UI state to
+        // "working" BEFORE even calling this, unconditionally — so a
+        // busy-rejected attempt (exception thrown above) still wiped
+        // whatever the REAL in-flight request was showing, and once
+        // wiped, nothing put it back until that real request finished,
+        // producing a confusing "response is for the wrong message"
+        // lag. Emitting once here, only after the POST is confirmed
+        // accepted, gives the caller a real, safe trigger to reset its
+        // UI — an empty chunk is never emitted from the "text" branch
+        // below, so it can't be confused with real streamed content.
+        emit("")
         val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
         while (true) {
             if (System.currentTimeMillis() > deadline) {

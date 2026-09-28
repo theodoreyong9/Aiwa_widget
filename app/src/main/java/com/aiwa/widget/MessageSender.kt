@@ -14,9 +14,30 @@ import com.aiwa.bridge.ClaudeBridge
  */
 suspend fun sendAndTrack(bridge: ClaudeBridge, text: String) {
     if (text.isBlank()) return
-    AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, output = "") }
     try {
-        bridge.sendMessage(text).collect { chunk -> AiwaRepository.update { it.copy(output = it.output + chunk) } }
+        var started = false
+        bridge.sendMessage(text).collect { chunk ->
+            if (!started) {
+                started = true
+                // Reported live: this used to reset state UNCONDITIONALLY
+                // before even attempting the send — so a busy-rejected
+                // attempt (a real request from elsewhere already in
+                // flight) still wiped whatever that real request was
+                // showing, with nothing to restore it until that request
+                // finished — surfacing as "the response is for the
+                // wrong/previous input". The bridge now only emits at all
+                // once the POST is actually accepted (see
+                // LocalClaudeBridge's own comment on this), so reaching
+                // here means this specific send is real — safe to reset.
+                // Appends rather than replaces: reported live as
+                // "je ne vois pas le texte total de la session" — the
+                // whole point of the scrollable areas (app + widget) is
+                // a real transcript, not just the latest reply.
+                AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, output = it.output + "\n\n🧑 $text\n🤖 ") }
+            } else if (chunk.isNotEmpty()) {
+                AiwaRepository.update { it.copy(output = it.output + chunk) }
+            }
+        }
         val realSessionId = try { bridge.currentSessionId() } catch (err: Exception) { null }
         AiwaRepository.update {
             it.copy(
@@ -30,9 +51,8 @@ suspend fun sendAndTrack(bridge: ClaudeBridge, text: String) {
         // NOT a failure — claude takes ~20-30s before its first token,
         // and an impatient extra send during that silent wait
         // correctly gets this back (a real request IS in flight).
-        // Leaving status untouched (still WORKING, from the real
-        // request) avoids the busy-rejection retry-storm bug this
-        // project already hit once.
+        // Nothing was ever reset above (see the `started` guard), so
+        // there is genuinely nothing to undo here.
     } catch (err: Exception) {
         AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n[erreur: ${err.message}]") }
     }

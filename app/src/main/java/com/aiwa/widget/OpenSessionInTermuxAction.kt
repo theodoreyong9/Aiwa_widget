@@ -47,11 +47,15 @@ class OpenSessionInTermuxAction : ActionCallback {
             // tap did anything, since clearing the active session means
             // no list row shows the "●" marker anymore either. A real,
             // visible confirmation instead of silence.
+            // output is cleared on ANY switch (not just "new"): it now
+            // accumulates a real transcript across turns (sendAndTrack),
+            // so leftover text from a DIFFERENT conversation would
+            // otherwise bleed into whichever one is opened next.
             AiwaRepository.update {
                 it.copy(
                     session = preview.take(30),
                     sessionId = sessionId,
-                    output = if (sessionId == null) "Nouvelle conversation prête — touche le micro." else it.output,
+                    output = if (sessionId == null) "Nouvelle conversation prête — touche le micro." else "",
                 )
             }
         } catch (err: Exception) {

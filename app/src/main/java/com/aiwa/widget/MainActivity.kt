@@ -10,6 +10,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -44,10 +46,16 @@ fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.St
 // session id — a real drift bug. sendAndTrack (MessageSender.kt) is
 // now the one shared implementation both use, so that can't recur.
 fun doSend(text:String){
-if(text.isBlank())return
+// Reported live: "quand je passe du widget à l'app il y a un
+// décalage... la réponse concerne l'avant-dernier input" — root cause:
+// this used to reset status/output to WORKING/"" HERE, unconditionally,
+// before even knowing whether the send would be accepted — so a
+// busy-rejected attempt (a real request from elsewhere still in
+// flight) still wiped that real request's own in-progress display,
+// with nothing to restore it until that request finished. sendAndTrack
+// now owns this reset entirely, and only performs it once the backend
+// has actually confirmed acceptance (see its own comment).
 scope.launch{
-AiwaRepository.update{it.copy(status=AiwaState.Status.WORKING,output="")}
-refreshWidget()
 sendAndTrack(bridge,text)
 refreshWidget()
 }
@@ -146,7 +154,12 @@ DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=
 DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
 scope.launch{
-try{bridge.selectSession(null);AiwaRepository.update{it.copy(session="nouvelle",sessionId=null)}}
+// Reported live: "je ne vois pas le texte total de la session" led
+// to output accumulating a real transcript instead of being wiped
+// per message — but switching to a genuinely DIFFERENT conversation
+// should still start that transcript fresh, or old text bleeds into
+// a session it was never part of.
+try{bridge.selectSession(null);AiwaRepository.update{it.copy(session="nouvelle",sessionId=null,output="")}}
 catch(err:Exception){reportError(err)}
 }
 })
@@ -154,7 +167,7 @@ for(s in sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false
 scope.launch{
-try{bridge.selectSession(s.id);AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id)}}
+try{bridge.selectSession(s.id);AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id,output="")}}
 catch(err:Exception){reportError(err)}
 }
 })
@@ -162,7 +175,15 @@ catch(err:Exception){reportError(err)}
 }
 }
 Text(statusLabel(state.status))
+// Reported live: "pourquoi je ne vois pas le texte total de la
+// session en scroll" — output now accumulates the real conversation
+// transcript (see sendAndTrack), but a plain Text with no scroll
+// modifier just clips anything past the screen. weight(1f) lets this
+// take whatever space the header/status/input/buttons around it
+// don't use, and verticalScroll makes long text actually scrollable.
+Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())){
 Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
+}
 // The explicit button here became redundant once LaunchedEffect above
 // started firing the same launch automatically on every app open —
 // reported live as a fair "might as well remove it" once that was
