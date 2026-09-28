@@ -20,12 +20,19 @@ import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.launch
-class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{MaterialTheme{AiwaScreen()}}}}
+class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState)
+// The widget's own 🎙️ passes this extra (see AiwaWidget.kt's
+// AutoDictateKey) so tapping it from the home screen goes straight
+// into dictation instead of just opening the app to a blank screen —
+// restoring the mic as its own real affordance, not folded into a
+// generic "open" button.
+val autoDictate=intent?.getBooleanExtra("autoDictate",false)?:false
+setContent{MaterialTheme{AiwaScreen(autoDictate)}}}}
 // "Travail…" alone left every message looking stuck for the first
 // 20-30s (claude's real, confirmed cold-start delay before its first
 // token) — this sets the right expectation instead of looking hung.
 private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Travail… (jusqu'à 30s, patiente)";AiwaState.Status.WAITING->"En attente de réponse";AiwaState.Status.DONE->"Terminé";AiwaState.Status.ERROR->"Erreur"}
-@Composable private fun AiwaScreen(){
+@Composable private fun AiwaScreen(autoDictate:Boolean=false){
 val context=LocalContext.current
 val bridge=remember{LocalClaudeBridge()}
 val scope=rememberCoroutineScope()
@@ -35,6 +42,44 @@ var sessions by remember{mutableStateOf(listOf<SessionInfo>())}
 var sessionMenuExpanded by remember{mutableStateOf(false)}
 fun refreshWidget(){scope.launch{AiwaWidget().updateAll(context)}}
 fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output=it.output+"\n[erreur: ${err.message}]")}}
+// Reported live: "the mic fills the text field but I still have to
+// tap Envoyer myself — that's ugly, it should be automatic". Both the
+// manual "➤ Envoyer" button and dictation completing now go through
+// this single function instead of duplicating the send coroutine, so
+// voice input sends itself the moment speech recognition finishes.
+fun doSend(text:String){
+if(text.isBlank())return
+scope.launch{
+AiwaRepository.update{it.copy(status=AiwaState.Status.WORKING,output="")}
+refreshWidget()
+try{
+bridge.sendMessage(text).collect{chunk->AiwaRepository.update{it.copy(output=it.output+chunk)}}
+// Reported live as confusing: the app kept showing the "Aiwa"
+// placeholder label forever, so the real backend-assigned
+// conversation id (which DOES persist correctly — see
+// current_session in aiwa_server.py) was never visible anywhere in
+// the app, only ever in the picker's own list. Surfacing it here,
+// once a message actually completes, makes the displayed session
+// reflect reality instead of a name that was never real.
+val realSessionId=try{bridge.currentSessionId()}catch(err:Exception){null}
+AiwaRepository.update{it.copy(status=AiwaState.Status.DONE,session=realSessionId?.take(8)?:it.session)}
+}catch(err:com.aiwa.bridge.BusyException){
+// Reported live and confirmed via server-side tracing: this is NOT
+// a failure — claude takes ~20-30s before its first token, and an
+// impatient extra tap during that silent wait used to land here,
+// flip status to ERROR, and thereby RE-ENABLE this very button
+// (enabled=status!=WORKING) — inviting yet another tap, cascading
+// into a whole burst of "busy" rejections while the ORIGINAL
+// request quietly kept working in the background the entire time
+// (and did complete on its own). Leaving status untouched (still
+// WORKING, from the real request) keeps the button correctly
+// disabled instead of re-arming that loop.
+}catch(err:Exception){
+reportError(err)
+}
+refreshWidget()
+}
+}
 // Real speech-to-text via Android's own system recognizer — the
 // previous 🎙️ icon (on the widget, and implicitly here) never called
 // any STT API at all; this is the first real implementation. Needs
@@ -44,7 +89,11 @@ fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.St
 // rather than silently doing nothing.
 val speechLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
 val heard=result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-if(!heard.isNullOrBlank())input=heard
+if(!heard.isNullOrBlank()){
+input=heard
+doSend(heard)
+input=""
+}
 }
 fun launchDictation(){
 val intent=Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply{putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)}
@@ -55,6 +104,10 @@ fun startDictation(){
 val granted=ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
 if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 }
+// Tapping the widget's own 🎙️ (see AiwaWidget.kt) opens this Activity
+// with autoDictate=true so it goes straight into dictation instead of
+// landing on a blank screen requiring yet another tap.
+LaunchedEffect(autoDictate){if(autoDictate)startDictation()}
 // Reported live: "Not allowed to start service Intent ... without
 // permission com.termux.permission.RUN_COMMAND" — declaring the
 // permission in the manifest was never enough on its own; like
@@ -154,37 +207,8 @@ OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMax
 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
 Button(onClick={startDictation()}){Text("🎙️")}
 Button(enabled=state.status!=AiwaState.Status.WORKING,onClick={
-val text=input
-scope.launch{
-AiwaRepository.update{it.copy(status=AiwaState.Status.WORKING,output="")}
-refreshWidget()
-try{
-bridge.sendMessage(text).collect{chunk->AiwaRepository.update{it.copy(output=it.output+chunk)}}
-// Reported live as confusing: the app kept showing the "Aiwa"
-// placeholder label forever, so the real backend-assigned
-// conversation id (which DOES persist correctly — see
-// current_session in aiwa_server.py) was never visible anywhere in
-// the app, only ever in the picker's own list. Surfacing it here,
-// once a message actually completes, makes the displayed session
-// reflect reality instead of a name that was never real.
-val realSessionId=try{bridge.currentSessionId()}catch(err:Exception){null}
-AiwaRepository.update{it.copy(status=AiwaState.Status.DONE,session=realSessionId?.take(8)?:it.session)}
-}catch(err:com.aiwa.bridge.BusyException){
-// Reported live and confirmed via server-side tracing: this is NOT
-// a failure — claude takes ~20-30s before its first token, and an
-// impatient extra tap during that silent wait used to land here,
-// flip status to ERROR, and thereby RE-ENABLE this very button
-// (enabled=status!=WORKING) — inviting yet another tap, cascading
-// into a whole burst of "busy" rejections while the ORIGINAL
-// request quietly kept working in the background the entire time
-// (and did complete on its own). Leaving status untouched (still
-// WORKING, from the real request) keeps the button correctly
-// disabled instead of re-arming that loop.
-}catch(err:Exception){
-reportError(err)
-}
-refreshWidget()
-}
+doSend(input)
+input=""
 }){Text("➤ Envoyer")}
 // "Fond" (background instruction) is deliberately not exposed here:
 // the backend's own /api/background always rejects it
