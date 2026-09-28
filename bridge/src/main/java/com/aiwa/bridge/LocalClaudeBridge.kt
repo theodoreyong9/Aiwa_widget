@@ -15,6 +15,14 @@ import org.json.JSONObject
 private const val POLL_INTERVAL_MS = 150L
 private const val POLL_TIMEOUT_MS = 5 * 60_000L
 
+/** Distinguishes "the backend rejected this because MY OWN earlier
+ * request is still being processed" from a genuine failure — callers
+ * should not treat this as an error to surface/retry from, since doing
+ * so (see the bug this fixed in MainActivity) can undo the real
+ * request's own in-flight state and invite a self-sustaining retry
+ * storm while that original request is quietly still working. */
+class BusyException(message: String) : Exception(message)
+
 class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") : ClaudeBridge {
 
     // A raw ConnectException's own message ("Failed to connect to
@@ -61,6 +69,17 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     override fun sendMessage(text: String): Flow<String> = flow {
         val acceptedRaw = postText("/api/message", text)
         if (!acceptedRaw.contains("\"accepted\":true") && !acceptedRaw.contains("\"accepted\": true")) {
+            // Reported live and confirmed via server-side tracing: each
+            // claude invocation takes ~20-30s before its first token
+            // (proot/cold-start overhead) with nothing visible in the
+            // app meanwhile — an impatient extra tap during that wait
+            // correctly gets "busy" back (a real request IS in flight),
+            // but the caller needs to tell this apart from a genuine
+            // failure, or it ends up undoing the real request's own
+            // WORKING state (see MainActivity's BusyException handling).
+            if (acceptedRaw.contains("\"busy\"")) {
+                throw BusyException("a message from this app is already being processed")
+            }
             throw IllegalStateException("message not accepted: $acceptedRaw")
         }
         val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS

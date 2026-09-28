@@ -21,7 +21,10 @@ import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.launch
 class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{MaterialTheme{AiwaScreen()}}}}
-private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Travail…";AiwaState.Status.WAITING->"En attente de réponse";AiwaState.Status.DONE->"Terminé";AiwaState.Status.ERROR->"Erreur"}
+// "Travail…" alone left every message looking stuck for the first
+// 20-30s (claude's real, confirmed cold-start delay before its first
+// token) — this sets the right expectation instead of looking hung.
+private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Travail… (jusqu'à 30s, patiente)";AiwaState.Status.WAITING->"En attente de réponse";AiwaState.Status.DONE->"Terminé";AiwaState.Status.ERROR->"Erreur"}
 @Composable private fun AiwaScreen(){
 val context=LocalContext.current
 val bridge=remember{LocalClaudeBridge()}
@@ -150,6 +153,17 @@ bridge.sendMessage(text).collect{chunk->AiwaRepository.update{it.copy(output=it.
 // reflect reality instead of a name that was never real.
 val realSessionId=try{bridge.currentSessionId()}catch(err:Exception){null}
 AiwaRepository.update{it.copy(status=AiwaState.Status.DONE,session=realSessionId?.take(8)?:it.session)}
+}catch(err:com.aiwa.bridge.BusyException){
+// Reported live and confirmed via server-side tracing: this is NOT
+// a failure — claude takes ~20-30s before its first token, and an
+// impatient extra tap during that silent wait used to land here,
+// flip status to ERROR, and thereby RE-ENABLE this very button
+// (enabled=status!=WORKING) — inviting yet another tap, cascading
+// into a whole burst of "busy" rejections while the ORIGINAL
+// request quietly kept working in the background the entire time
+// (and did complete on its own). Leaving status untouched (still
+// WORKING, from the real request) keeps the button correctly
+// disabled instead of re-arming that loop.
 }catch(err:Exception){
 reportError(err)
 }
