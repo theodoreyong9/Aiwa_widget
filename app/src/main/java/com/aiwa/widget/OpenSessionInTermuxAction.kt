@@ -41,7 +41,19 @@ class OpenSessionInTermuxAction : ActionCallback {
         val preview = parameters[SessionPreviewKey] ?: "nouvelle"
         try {
             LocalClaudeBridge().selectSession(sessionId)
-            AiwaRepository.update { it.copy(session = preview.take(30), sessionId = sessionId) }
+            // Reported live: "le bouton nouvelle session ne marche pas"
+            // — it actually did work (current_session correctly cleared
+            // server-side), but nothing on screen ever confirmed the
+            // tap did anything, since clearing the active session means
+            // no list row shows the "●" marker anymore either. A real,
+            // visible confirmation instead of silence.
+            AiwaRepository.update {
+                it.copy(
+                    session = preview.take(30),
+                    sessionId = sessionId,
+                    output = if (sessionId == null) "Nouvelle conversation prête — touche le micro." else it.output,
+                )
+            }
         } catch (err: Exception) {
             AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = "Impossible de changer de session : ${err.message}") }
         }
