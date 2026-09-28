@@ -19,6 +19,12 @@ from pathlib import Path
 
 HOST = "127.0.0.1"
 PORT = 8787
+# How long a single `claude` invocation gets before this backend kills
+# it and gives up. This is a safety net against it hanging with no
+# output at all (reported live, likely tied to --resume specifically —
+# see run_claude) — without it, `busy` could stay stuck true forever,
+# permanently refusing every message after the one that got stuck.
+RESULT_TIMEOUT_S = 120
 
 events = []
 lock = threading.Lock()
@@ -112,36 +118,50 @@ def run_claude(text):
         message = {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
         process.stdin.write(json.dumps(message) + "\n")
         process.stdin.close()
-        for line in process.stdout:
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if event.get("type") == "stream_event":
-                delta = event.get("event", {}).get("delta", {})
-                if delta.get("type") == "text_delta":
-                    emit({"type": "text", "text": delta.get("text", "")})
-            elif event.get("type") == "result":
-                saw_result = True
-                # A fresh run (no --resume) only reveals its own real
-                # session id here — capturing it is what lets the NEXT
-                # message actually continue this same conversation
-                # instead of starting yet another new one each time.
-                real_session_id = event.get("session_id")
-                if real_session_id:
-                    with lock:
-                        current_session = real_session_id
-                emit({"type": "done", "result": event.get("result", ""), "session_id": real_session_id})
-                # Reported live: every message after the first got
-                # rejected as "busy" forever. Root cause: a "result"
-                # event IS claude's final output for a one-shot -p
-                # invocation, but this loop kept reading `process.stdout`
-                # waiting for more lines that never came — claude
-                # apparently doesn't promptly close stdout after
-                # printing its result — so `finally: busy = False` below
-                # never ran. Nothing meaningful is left to read once we
-                # have the result.
-                break
+        # Reported live: breaking the loop on "result" (see below) was
+        # not enough on its own — every message after the first still
+        # got rejected as "busy" forever, even with that fix in place.
+        # The likely real cause: `claude -p --resume <session>` (only
+        # used from the SECOND message onward, once a real session
+        # exists) appears to sometimes hang and produce NO output at
+        # all — the plain first-message case (no --resume) worked fine.
+        # Without this watchdog, `for line in process.stdout` below
+        # blocks forever with nothing to read, `busy` never clears, and
+        # every later message is refused permanently. Killing the
+        # process after a bounded wait guarantees `busy` always clears
+        # and the client always gets a real, honest error either way,
+        # whatever the exact reason turns out to be.
+        watchdog = threading.Timer(RESULT_TIMEOUT_S, process.kill)
+        watchdog.daemon = True
+        watchdog.start()
+        try:
+            for line in process.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if event.get("type") == "stream_event":
+                    delta = event.get("event", {}).get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        emit({"type": "text", "text": delta.get("text", "")})
+                elif event.get("type") == "result":
+                    saw_result = True
+                    # A fresh run (no --resume) only reveals its own real
+                    # session id here — capturing it is what lets the NEXT
+                    # message actually continue this same conversation
+                    # instead of starting yet another new one each time.
+                    real_session_id = event.get("session_id")
+                    if real_session_id:
+                        with lock:
+                            current_session = real_session_id
+                    emit({"type": "done", "result": event.get("result", ""), "session_id": real_session_id})
+                    # A "result" event IS claude's final output for a
+                    # one-shot -p invocation — nothing meaningful is left
+                    # to read once we have it, and claude doesn't
+                    # promptly close stdout on its own afterward.
+                    break
+        finally:
+            watchdog.cancel()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -152,7 +172,7 @@ def run_claude(text):
         # the Android client polling forever with nothing to show —
         # this is the one real, guaranteed termination event either way.
         if not saw_result:
-            emit({"type": "error", "message": f"claude exited with code {process.returncode} before finishing"})
+            emit({"type": "error", "message": f"claude exited with code {process.returncode} before finishing (killed after {RESULT_TIMEOUT_S}s with no result if that code looks like a kill signal)"})
     finally:
         with lock:
             busy = False
