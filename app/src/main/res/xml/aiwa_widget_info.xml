@@ -3,4 +3,4 @@
      the widget now has a real scrollable response area that needs
      actual vertical room to be useful at all; still resizable
      (resizeMode) if the user wants it smaller or bigger. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="180dp" android:minHeight="180dp" android:minResizeWidth="140dp" android:minResizeHeight="100dp" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="180dp" android:minHeight="220dp" android:minResizeWidth="140dp" android:minResizeHeight="120dp" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />

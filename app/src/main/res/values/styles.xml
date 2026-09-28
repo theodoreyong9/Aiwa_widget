@@ -1,1 +1,12 @@
-<resources><style name="Theme.Aiwa" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item></style></resources>
+<resources><style name="Theme.Aiwa" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item></style>
+<!-- Reported live: DictateActivity's raw Theme.Translucent.NoTitleBar
+     still showed a brief flash of Aiwa's own app icon/window on the
+     FIRST tap of the widget's mic (Android's normal cold-start
+     "preview window" for a process that isn't already resident in
+     memory yet) — later taps, with the process already warm, were
+     instant. windowDisablePreview tells the system not to show that
+     placeholder window at all, and windowAnimationStyle=@null removes
+     the transition animation on top of it. This can reduce but not
+     fully erase the real, unavoidable cost of an Android process cold
+     start itself — that part isn't a theme setting. -->
+<style name="Theme.Dictate" parent="android:style/Theme.Translucent.NoTitleBar"><item name="android:windowDisablePreview">true</item><item name="android:windowAnimationStyle">@null</item></style></resources>

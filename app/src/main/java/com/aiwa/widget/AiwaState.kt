@@ -4,7 +4,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 data class AiwaState(
-    val session: String = "Aiwa",
+    // Reported live: the app showed the literal placeholder "Aiwa"
+    // while the widget showed "aucune session" for the exact same real
+    // state (no session established yet) — two different-looking
+    // placeholders for one meaning was confusing ("aucun des deux
+    // n'est bon"). One consistent default fixes both call sites at
+    // once.
+    val session: String = "aucune session",
     // The real, full backend session id — `session` above is only ever
     // a short display label (truncated to 8 chars once a real id is
     // known). Reported live: opening a session directly in Termux

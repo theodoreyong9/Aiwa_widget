@@ -33,14 +33,19 @@
         </activity>
         <!-- Reported live: the widget's mic opening the full app first,
              then dictation, looked slow and "moche" — a real trampoline
-             Activity with no visible UI of its own (Translucent.NoTitleBar)
-             hosts only what Android actually requires a real Activity for
-             (the mic permission prompt, the system recognizer's own UI),
-             then finishes itself — the user only ever sees the system
+             Activity with no visible UI of its own hosts only what
+             Android actually requires a real Activity for (the mic
+             permission prompt, the system recognizer's own UI), then
+             finishes itself — the user only ever sees the system
              recognizer's dialog appear directly. excludeFromRecents keeps
-             this implementation detail out of the recent-apps switcher. -->
+             this implementation detail out of the recent-apps switcher.
+             Theme.Dictate (styles.xml) adds windowDisablePreview to stop
+             the brief app-icon flash reported live on the FIRST tap
+             (Android's cold-start preview window for a not-yet-resident
+             process) — later taps, with the process already warm, never
+             showed it in the first place. -->
         <activity android:name=".DictateActivity" android:exported="true"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:theme="@style/Theme.Dictate"
             android:excludeFromRecents="true" />
         <receiver android:name=".AiwaWidgetReceiver" android:exported="true">
             <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
