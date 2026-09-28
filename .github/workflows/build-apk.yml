@@ -3,6 +3,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,3 +22,15 @@ jobs:
         with:
           name: aiwa-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish the built APK to the repo root
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk aiwa-debug.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f aiwa-debug.apk
+          if git diff --cached --quiet; then
+            echo "APK unchanged, nothing to commit"
+          else
+            git commit -m "Update built debug APK [skip ci]"
+            git push
+          fi
