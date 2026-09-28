@@ -1,5 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application android:allowBackup="true" android:label="Aiwa" android:supportsRtl="true" android:theme="@style/Theme.Aiwa">
+    <!-- Needed for LocalClaudeBridge's own HTTP calls to the local
+         backend — without it no socket can open at all, cleartext
+         policy or not. Was never declared here even before this fix. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:allowBackup="true" android:label="Aiwa" android:supportsRtl="true" android:theme="@style/Theme.Aiwa" android:networkSecurityConfig="@xml/network_security_config">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

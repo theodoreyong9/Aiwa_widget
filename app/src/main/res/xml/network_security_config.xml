@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  This app talks to its own local backend on 127.0.0.1 over plain HTTP
+  (see backend/aiwa_server.py and LocalClaudeBridge.kt — it's a
+  same-device bridge, never a real network service). Android blocks
+  ALL cleartext HTTP by default for apps targeting API 28+, including
+  to localhost — there is no automatic exemption for 127.0.0.1. Scoped
+  here to exactly that host rather than a blanket
+  usesCleartextTraffic="true", so any future real internet-facing
+  feature still gets the default HTTPS-only enforcement.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
