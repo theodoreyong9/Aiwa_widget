@@ -23,12 +23,27 @@ The current Claude Code CLI remains the execution backend because it is not an A
 ## Status against the target UX
 
 Real and working (as of the polling fix in `LocalClaudeBridge.kt` — see `docs/claude-code.md`):
-- type a message and send it, with real Claude output actually reaching the app (the client now polls `/api/events` until a real `done`/`error`, instead of firing one GET that raced the backend and produced nothing).
+- type a message and send it, with real Claude output actually reaching the app (the client now polls `/api/events` until a real `done`/`error`, instead of firing one GET that raced the backend and produced nothing) — **but only once a real backend is actually running and reachable; see "Running this for real" below.**
 - working / finished / error states (`AiwaState.Status`), now actually wired through `AiwaRepository` and read by both `MainActivity` and the home-screen widget, instead of sitting unused.
-- the home-screen widget itself now shows this real, live state (session, status, a preview of the output or the pending question) instead of static placeholder text — it still opens the full app to actually type or dictate, since Glance's widget surface has no real text-input component to embed one directly.
+- the home-screen widget itself now shows this real, live state (session, status, a preview of the output or the pending question) instead of static placeholder text — it still opens the full app to actually type a message, since Glance's widget surface has no real text-input component to embed one directly.
 
-Still not real:
-- session selection — `/api/sessions` returns the one hard-coded development session id; there is no real selector.
-- answering a mid-conversation question from Claude — `AiwaState.WAITING`/`question` exist in the model but nothing yet detects a real question from the stream and prompts for an answer.
-- background instruction while work is running — `/api/background` deliberately returns `not wired yet`.
+Still not real — these were never built, not by this session and not before it, whatever the 🎙️ icon or "Fond" wording might suggest:
+- **voice / dictation.** The 🎙️ icon on the widget and the mention in "Target UX" are exactly that — a target. Tapping it just opens the app; nothing anywhere in this codebase calls `SpeechRecognizer`/`RecognizerIntent` or any other STT API. Typing is the only real input method today.
+- **session selection.** `/api/sessions` returns the one hard-coded development session id; there is no real selector anywhere in the UI. `docs/claude-code.md` has said as much since before this session's changes.
+- **background instruction while work is running.** `/api/background` deliberately returns `not wired yet`; the "Fond" button that called it has been removed from `MainActivity` rather than leave a control that always silently fails.
+- **answering a mid-conversation question from Claude.** `AiwaState.WAITING`/`question` exist in the model but nothing yet detects a real question from the stream and prompts for an answer.
 - no automated tests, on either the Kotlin or the Python side.
+
+## Running this for real
+
+Installing the APK is not enough on its own — the app only ever talks to `127.0.0.1:8787` (see `docs/claude-code.md`), and nothing in this repo starts that server for you. **`backend/aiwa_server.py` (and the `claude` CLI itself) has to actually be running on the SAME device the app is installed on** — `127.0.0.1` is per-device loopback, so a server running on a separate computer is not reachable this way at all, port-forwarding aside. "fail to connect to 127.0.0.1:8787" means exactly this: nothing is listening there yet, not a bug in the app.
+
+On a real phone, that means something like [Termux](https://termux.dev/) (a real terminal app, not this project's own code) with Node.js (for the Claude Code CLI) and Python 3 installed, then, inside Termux:
+```
+python3 backend/aiwa_server.py
+```
+left running for as long as you want the app to work. Wiring this up automatically (so it starts itself, survives a reboot, etc.) is real future work, not something either the app or the widget currently attempts.
+
+## Reinstalling without uninstalling first
+
+CI now signs every debug build with a fixed, committed `debug.keystore` at the repo root (the well-known public Android debug convention — alias/password `android`, never a real secret) instead of AGP's own default of auto-generating a different one per machine. Every GitHub Actions run is a fresh machine, so before this fix each build's APK had a genuinely different signing key, and Android refuses to install an APK over an existing one when the signatures don't match — hence needing to uninstall every time. Installing a new `aiwa-debug.apk` over the old one should now work as a normal update (keeping app data) as long as both were built after this fix.

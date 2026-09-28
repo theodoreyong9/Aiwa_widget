@@ -41,12 +41,11 @@ AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output=it.output+"\n
 refreshWidget()
 }
 }){Text("➤ Envoyer")}
-Button(onClick={
-scope.launch{
-try{bridge.sendBackgroundInstruction(input)}
-catch(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output=it.output+"\n[erreur: ${err.message}]")}}
-}
-}){Text("🧠 Fond")}
+// "Fond" (background instruction) is deliberately not exposed here:
+// the backend's own /api/background always rejects it
+// ({"accepted": false, "reason": "not wired yet"}) until its real
+// transport is verified — see docs/claude-code.md. A button that
+// always silently fails is worse than no button.
 }
 }
 }
