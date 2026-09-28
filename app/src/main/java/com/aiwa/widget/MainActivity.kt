@@ -38,38 +38,17 @@ fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.St
 // Reported live: "the mic fills the text field but I still have to
 // tap Envoyer myself — that's ugly, it should be automatic". Both the
 // manual "➤ Envoyer" button and dictation completing now go through
-// this single function instead of duplicating the send coroutine, so
-// voice input sends itself the moment speech recognition finishes.
+// this single function instead of duplicating the send coroutine.
+// Reported live SEPARATELY: the widget's own mic (DictateActivity) had
+// its OWN duplicate copy of this logic that never fetched the real
+// session id — a real drift bug. sendAndTrack (MessageSender.kt) is
+// now the one shared implementation both use, so that can't recur.
 fun doSend(text:String){
 if(text.isBlank())return
 scope.launch{
 AiwaRepository.update{it.copy(status=AiwaState.Status.WORKING,output="")}
 refreshWidget()
-try{
-bridge.sendMessage(text).collect{chunk->AiwaRepository.update{it.copy(output=it.output+chunk)}}
-// Reported live as confusing: the app kept showing the "Aiwa"
-// placeholder label forever, so the real backend-assigned
-// conversation id (which DOES persist correctly — see
-// current_session in aiwa_server.py) was never visible anywhere in
-// the app, only ever in the picker's own list. Surfacing it here,
-// once a message actually completes, makes the displayed session
-// reflect reality instead of a name that was never real.
-val realSessionId=try{bridge.currentSessionId()}catch(err:Exception){null}
-AiwaRepository.update{it.copy(status=AiwaState.Status.DONE,session=realSessionId?.take(8)?:it.session)}
-}catch(err:com.aiwa.bridge.BusyException){
-// Reported live and confirmed via server-side tracing: this is NOT
-// a failure — claude takes ~20-30s before its first token, and an
-// impatient extra tap during that silent wait used to land here,
-// flip status to ERROR, and thereby RE-ENABLE this very button
-// (enabled=status!=WORKING) — inviting yet another tap, cascading
-// into a whole burst of "busy" rejections while the ORIGINAL
-// request quietly kept working in the background the entire time
-// (and did complete on its own). Leaving status untouched (still
-// WORKING, from the real request) keeps the button correctly
-// disabled instead of re-arming that loop.
-}catch(err:Exception){
-reportError(err)
-}
+sendAndTrack(bridge,text)
 refreshWidget()
 }
 }
@@ -101,11 +80,9 @@ if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permissi
 // permission com.termux.permission.RUN_COMMAND" — declaring the
 // permission in the manifest was never enough on its own; like
 // RECORD_AUDIO above, a dangerous permission still needs an actual
-// runtime request, which this button never did. The widget's own "▶"
-// button (StartBackendAction.kt) has no Activity context to show a
-// permission dialog from, so it can only ever work AFTER this one has
-// been granted at least once here — permissions are per-app, not
-// per-component, so one grant covers both.
+// runtime request, which only an Activity can show — this is why the
+// backend auto-launch below lives here rather than directly in a
+// widget ActionCallback, which has no such context.
 fun launchTermuxBackend(){
 val result=startAiwaBackendViaTermux(context)
 AiwaRepository.update{
@@ -169,7 +146,7 @@ DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=
 DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
 scope.launch{
-try{bridge.selectSession(null);AiwaRepository.update{it.copy(session="nouvelle")}}
+try{bridge.selectSession(null);AiwaRepository.update{it.copy(session="nouvelle",sessionId=null)}}
 catch(err:Exception){reportError(err)}
 }
 })
@@ -177,7 +154,7 @@ for(s in sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false
 scope.launch{
-try{bridge.selectSession(s.id);AiwaRepository.update{it.copy(session=s.preview)}}
+try{bridge.selectSession(s.id);AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id)}}
 catch(err:Exception){reportError(err)}
 }
 })
@@ -189,9 +166,10 @@ Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
 // The explicit button here became redundant once LaunchedEffect above
 // started firing the same launch automatically on every app open —
 // reported live as a fair "might as well remove it" once that was
-// confirmed. The widget's own "▶" (StartBackendAction.kt) stays: it
-// has real, different value, letting the backend start from the home
-// screen without ever opening the app at all.
+// confirmed. The widget itself was later stripped down to just
+// session/mic/response (explicit request for a minimal design), so it
+// no longer has its own separate start-backend button either —
+// StartBackendAction.kt was removed as dead code.
 OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMaxWidth(),label={Text("Message")})
 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
 Button(onClick={startDictation()}){Text("🎙️")}

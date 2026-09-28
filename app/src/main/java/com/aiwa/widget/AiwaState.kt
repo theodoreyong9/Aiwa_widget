@@ -5,6 +5,12 @@ import kotlinx.coroutines.flow.StateFlow
 
 data class AiwaState(
     val session: String = "Aiwa",
+    // The real, full backend session id — `session` above is only ever
+    // a short display label (truncated to 8 chars once a real id is
+    // known). Reported live: opening a session directly in Termux
+    // needs the REAL id for `claude --resume`, not the truncated
+    // label, so this is tracked separately instead of re-deriving it.
+    val sessionId: String? = null,
     val status: Status = Status.READY,
     val output: String = "",
     val question: String? = null,

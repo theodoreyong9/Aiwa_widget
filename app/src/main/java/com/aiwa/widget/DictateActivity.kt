@@ -38,16 +38,15 @@ class DictateActivity : ComponentActivity() {
         val heard = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         if (!heard.isNullOrBlank()) {
             val appContext = applicationContext
-            AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, output = "") }
+            // Reported live: this used to have its OWN copy of the send
+            // logic, which never fetched/stored the real session id —
+            // the app kept showing the "Aiwa" placeholder forever
+            // whenever a message came from the widget's mic instead of
+            // the app. sendAndTrack (MessageSender.kt) is now the one
+            // real implementation both this and MainActivity call, so
+            // that drift can't happen again.
             CoroutineScope(Dispatchers.Default).launch {
-                try {
-                    LocalClaudeBridge().sendMessage(heard).collect { chunk ->
-                        AiwaRepository.update { it.copy(output = it.output + chunk) }
-                    }
-                    AiwaRepository.update { it.copy(status = AiwaState.Status.DONE) }
-                } catch (err: Exception) {
-                    AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = "[erreur: ${err.message}]") }
-                }
+                sendAndTrack(LocalClaudeBridge(), heard)
                 AiwaWidget().updateAll(appContext)
             }
         }
