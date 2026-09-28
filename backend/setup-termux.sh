@@ -18,7 +18,13 @@ pkg update -y
 pkg install -y nodejs python
 
 echo "== Installing the Claude Code CLI =="
-npm install -g @anthropic-ai/claude-code
+# --force: re-running this script (e.g. to update, or after this exact
+# script previously succeeded) hits a real npm quirk otherwise — a
+# global bin symlink from the prior install already exists on disk, and
+# plain `npm install -g` refuses to overwrite it (EEXIST), rather than
+# treating a same-package reinstall as the ordinary case it is. This
+# makes re-running safe, which is the whole point of a setup script.
+npm install -g @anthropic-ai/claude-code --force
 
 if ! command -v claude >/dev/null 2>&1; then
   echo "claude was not found on PATH after npm install — the package"
