@@ -52,6 +52,31 @@ fun startDictation(){
 val granted=ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
 if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 }
+// Reported live: "Not allowed to start service Intent ... without
+// permission com.termux.permission.RUN_COMMAND" — declaring the
+// permission in the manifest was never enough on its own; like
+// RECORD_AUDIO above, a dangerous permission still needs an actual
+// runtime request, which this button never did. The widget's own "▶"
+// button (StartBackendAction.kt) has no Activity context to show a
+// permission dialog from, so it can only ever work AFTER this one has
+// been granted at least once here — permissions are per-app, not
+// per-component, so one grant covers both.
+fun launchTermuxBackend(){
+val result=startAiwaBackendViaTermux(context)
+AiwaRepository.update{
+if(result.isSuccess)it.copy(status=AiwaState.Status.WORKING,output="Démarrage de Termux en arrière-plan…")
+else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
+}
+refreshWidget()
+}
+val termuxPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->
+if(granted)launchTermuxBackend()
+else AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Permission Termux refusée — impossible de démarrer le backend automatiquement.")}
+}
+fun startTermuxBackend(){
+val granted=ContextCompat.checkSelfPermission(context,"com.termux.permission.RUN_COMMAND")==PackageManager.PERMISSION_GRANTED
+if(granted)launchTermuxBackend() else termuxPermissionLauncher.launch("com.termux.permission.RUN_COMMAND")
+}
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
 Text("AIWA",style=MaterialTheme.typography.headlineMedium)
 Box{
@@ -82,14 +107,7 @@ catch(err:Exception){reportError(err)}
 }
 Text(statusLabel(state.status))
 Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
-Button(onClick={
-val result=startAiwaBackendViaTermux(context)
-AiwaRepository.update{
-if(result.isSuccess)it.copy(status=AiwaState.Status.WORKING,output="Démarrage de Termux en arrière-plan…")
-else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
-}
-refreshWidget()
-}){Text("▶ Démarrer le backend (Termux)")}
+Button(onClick={startTermuxBackend()}){Text("▶ Démarrer le backend (Termux)")}
 OutlinedTextField(value=input,onValueChange={input=it},modifier=Modifier.fillMaxWidth(),label={Text("Message")})
 Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
 Button(onClick={startDictation()}){Text("🎙️")}
