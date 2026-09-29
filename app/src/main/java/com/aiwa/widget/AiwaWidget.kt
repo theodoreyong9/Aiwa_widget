@@ -10,7 +10,11 @@ import androidx.compose.ui.unit.sp
 import androidx.glance.*
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
+import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.SizeMode
+import androidx.glance.appwidget.action.ActionCallback
+import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -21,14 +25,19 @@ import com.aiwa.bridge.LocalClaudeBridge
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.sample
 
-// One compact row of buttons — [A: opens the Aiwa app] [session ▾] [grey
+// A compact row of buttons — [A: opens the Aiwa app] [session ▾] [grey
 // mic with a red recording dot] [model ▾] and, once there is a session to
-// read, [Claude ↗].
+// read, [Claude ↗]. When the widget is tall enough a second row shows the
+// GitHub repository the next session starts on and the push mode.
 // No conversation text: a cloud session's replies can't be read back by a
 // program, so they live in the Claude app and "Claude ↗" opens them. Each ▾
 // button opens a small floating picker window (Pickers.kt): a widget cannot
 // draw an overlay dropdown.
 class AiwaWidget : GlanceAppWidget() {
+    // Exact: the composition learns the real size (LocalSize), so the
+    // GitHub row only shows when there is room for it.
+    override val sizeMode: SizeMode = SizeMode.Exact
+
     @OptIn(FlowPreview::class)
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val bridge = LocalClaudeBridge()
@@ -62,13 +71,17 @@ private fun Content(state: AiwaState) {
     // seconds) the session button says so: the widget has no other place
     // to show progress.
     val sessionLabel = if (state.status == AiwaState.Status.WORKING) "Envoi…" else state.session.take(20)
-    Row(
+    val green = rgb(android.graphics.Color.rgb(46, 125, 90))
+    // Room for a second row (two rows of buttons plus the padding).
+    val tall = LocalSize.current.height >= 96.dp
+    Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(rgb(android.graphics.Color.rgb(22, 22, 28)))
             .cornerRadius(24.dp)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(
             modifier = GlanceModifier.size(36.dp)
                 .background(pill)
@@ -129,5 +142,57 @@ private fun Content(state: AiwaState) {
                     .clickable(actionStartActivity<OpenClaudeActivity>()),
             )
         }
+    }
+    if (tall) {
+        Spacer(GlanceModifier.height(6.dp))
+        Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // GitHub: which repository the next session starts on, and
+            // whether Claude pushes straight to its main branch.
+            if (!state.githubConnected) {
+                Text(
+                    text = "GitHub : à connecter (ouvre Aiwa)",
+                    style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                    maxLines = 1,
+                    modifier = GlanceModifier.defaultWeight()
+                        .background(pill)
+                        .cornerRadius(20.dp)
+                        .padding(horizontal = 11.dp, vertical = 11.dp)
+                        .clickable(actionStartActivity<MainActivity>()),
+                )
+            } else {
+                val repoLabel = state.repo?.substringAfter('/')?.take(22) ?: "Aucun dépôt"
+                Text(
+                    text = "⎇ $repoLabel  ▾",
+                    style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                    maxLines = 1,
+                    modifier = GlanceModifier.defaultWeight()
+                        .background(pill)
+                        .cornerRadius(20.dp)
+                        .padding(horizontal = 11.dp, vertical = 11.dp)
+                        .clickable(actionStartActivity<RepoPickerActivity>()),
+                )
+                if (state.repo != null) {
+                    Spacer(GlanceModifier.width(6.dp))
+                    Text(
+                        text = if (state.pushMain) "Push direct ●" else "Push direct ○",
+                        style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        modifier = GlanceModifier
+                            .background(if (state.pushMain) green else pill)
+                            .cornerRadius(20.dp)
+                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .clickable(actionRunCallback<TogglePushMainCallback>()),
+                    )
+                }
+            }
+        }
+    }
+    }
+}
+
+// The widget's "Push direct" button: flips the mode without opening anything.
+class TogglePushMainCallback : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        switchPushMain(context, LocalClaudeBridge(), !AiwaRepository.state.value.pushMain)
     }
 }

@@ -20,12 +20,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.aiwa.bridge.LocalClaudeBridge
+import com.aiwa.bridge.RepoInfo
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -129,5 +132,48 @@ class ModelPickerActivity : ComponentActivity() {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchModel(appContext, LocalClaudeBridge(), modelId) }
+    }
+}
+
+// The repository the next NEW session starts on (Claude works there and
+// pushes to it). The list comes from the user's own `gh` login.
+class RepoPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            var repos by remember { mutableStateOf<List<RepoInfo>?>(null) }
+            var problem by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(Unit) {
+                val bridge = LocalClaudeBridge()
+                BackendSync.refresh(bridge)
+                try {
+                    repos = bridge.githubRepos()
+                } catch (err: Exception) {
+                    problem = err.message ?: "erreur inconnue"
+                }
+            }
+            val entries = buildList {
+                add(PickerEntry("Aucun dépôt (chat libre)", state.repo == null) { pickRepo(null) })
+                val list = repos
+                val failure = problem
+                if (list != null) {
+                    list.forEach { r ->
+                        add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
+                    }
+                } else if (failure != null) {
+                    add(PickerEntry(failure, false) { finish() })
+                } else {
+                    add(PickerEntry("Chargement des dépôts…", false) { })
+                }
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun pickRepo(repo: String?) {
+        val appContext = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { switchRepo(appContext, LocalClaudeBridge(), repo) }
     }
 }

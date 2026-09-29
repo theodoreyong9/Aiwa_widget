@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 5
+const val EXPECTED_BACKEND_VERSION = 6
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -38,6 +38,14 @@ data class AiwaState(
     val cloudSessions: List<CloudSessionInfo> = emptyList(),
     val model: String? = null,
     val backendVersion: Int = 0,
+    // GitHub: the repository new sessions start on (null = the plain chat),
+    // whether Claude pushes straight to its main branch, and the state of
+    // the `gh` login the user made in Termux.
+    val repo: String? = null,
+    val pushMain: Boolean = true,
+    val githubConnected: Boolean = false,
+    val githubLogin: String? = null,
+    val githubError: String? = null,
     val status: Status = Status.READY,
     // The last problem worth telling the user about, shown in the app only
     // (the widget has no message area: its errors are toasts). There is no

@@ -38,6 +38,11 @@ object BackendSync {
                     cloudSessions = sessions,
                     model = status.model,
                     backendVersion = status.version,
+                    repo = status.repo,
+                    pushMain = status.pushMain,
+                    githubConnected = status.githubConnected,
+                    githubLogin = status.githubLogin,
+                    githubError = status.githubError,
                 )
             }
         }

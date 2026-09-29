@@ -13,6 +13,10 @@ that was removed on request (no more phone/CLI sessions).
 HONEST LIMIT (documented by Anthropic): the CLI only QUEUES a message and
 returns. There is no way to read a cloud session's reply back from a
 program, so Aiwa sends and the answer is read in the Claude app.
+
+GitHub (aiwa_github.py): Aiwa can start the cloud session on one of the
+account's repositories and tell Claude to push straight to it (or to a
+work branch).
 """
 import fcntl
 import json
@@ -31,6 +35,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import aiwa_github as github
+
 
 def _ts():
     return time.strftime("%H:%M:%S")
@@ -40,7 +46,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 5
+BACKEND_VERSION = 6
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -58,10 +64,6 @@ STATE_FILE = Path.home() / ".aiwa_state.json"
 CLOUD_LOG = Path.home() / "aiwa_cloud_last.log"
 CLOUD_ID_RE = re.compile(r"(?:session|cse)_[A-Za-z0-9]+")
 CLOUD_URL_RE = re.compile(r"https://claude\.ai/code/[^\s\"')>\]]+")
-# Terminal escape sequences: CSI, OSC, and the two-byte kind (ESC 7 / ESC 8
-# save/restore the cursor — those left "78" in front of an error message).
-ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])")
-CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 lock = threading.Lock()  # guards the state below
 # None = the CLI's own default model.
@@ -69,6 +71,12 @@ current_model = None
 # The cloud session messages go to; None = the next message creates one.
 current_cloud = None
 cloud_busy = False
+# GitHub: the repository new sessions start on ("owner/name"; None = the
+# plain chat) and whether Claude pushes straight to its main branch
+# (otherwise to a fresh aiwa/<date> branch).
+current_repo = None
+push_main = True
+github_error = None  # the last GitHub problem worth showing in the app
 store_lock = threading.Lock()
 # Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
 # that follows a creation, for instance).
@@ -76,15 +84,17 @@ followup_lock = threading.Lock()
 
 
 def _load_state():
-    global current_model, current_cloud
+    global current_model, current_cloud, current_repo, push_main
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return
     if isinstance(data, dict):
-        model, cloud = data.get("model"), data.get("cloud")
+        model, cloud, repo = data.get("model"), data.get("cloud"), data.get("repo")
         current_model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
         current_cloud = cloud if isinstance(cloud, str) and CLOUD_ID_RE.fullmatch(cloud) else None
+        current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
+        push_main = data.get("push_main") is not False
 
 
 def _save_state():
@@ -92,13 +102,15 @@ def _save_state():
     without this, the next message after a restart would silently start a
     brand-new cloud session instead of continuing the current one."""
     try:
-        STATE_FILE.write_text(json.dumps({"model": current_model, "cloud": current_cloud}), encoding="utf-8")
+        STATE_FILE.write_text(json.dumps({
+            "model": current_model, "cloud": current_cloud, "repo": current_repo,
+            "push_main": push_main,
+        }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
 
 
-def _clean(text):
-    return CTRL_RE.sub("", ANSI_RE.sub("", text).replace("\r", "\n"))
+_clean = github.clean
 
 
 def _ensure_cloud_repo():
@@ -215,19 +227,39 @@ def _load_cloud_sessions():
     return data if isinstance(data, list) else []
 
 
-def _save_cloud_session(session_id, title, url):
+def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None):
     """The CLI has no non-interactive way to LIST cloud sessions, so the
-    ones Aiwa created or was given a link to are remembered here."""
+    ones Aiwa created or was given a link to are remembered here, with the
+    repository (and branch) a session was started on."""
     with store_lock:
         entries = _load_cloud_sessions()
-        existing = next((e for e in entries if e.get("id") == session_id), None)
+        existing = next((e for e in entries if e.get("id") == session_id), None) or {}
         entries = [e for e in entries if e.get("id") != session_id]
-        entries.insert(0, {
+        entry = {
             "id": session_id,
-            "title": (existing or {}).get("title") or title,
-            "url": url or (existing or {}).get("url") or f"https://claude.ai/code/{session_id}",
-        })
+            "title": existing.get("title") or title,
+            "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
+        }
+        for key, value in (("repo", repo), ("branch", branch), ("direct", direct)):
+            value = existing.get(key) if value is None else value
+            if value is not None:
+                entry[key] = value
+        entries.insert(0, entry)
         CLOUD_STORE.write_text(json.dumps(entries[:30]), encoding="utf-8")
+
+
+def _session_entry(session_id):
+    return next((e for e in _load_cloud_sessions() if e.get("id") == session_id), {})
+
+
+def _instructions(repo, branch, direct):
+    """Appended to every message sent in a repository session."""
+    lines = [f"[Aiwa] Dépôt de travail : {repo}."]
+    if direct:
+        lines.append(f"Quand tu as terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request).")
+    else:
+        lines.append(f"Travaille sur la branche {branch} (déjà créée) : commit et push dessus, ne touche pas à la branche principale.")
+    return "\n\n" + "\n".join(lines)
 
 
 def _last_json_object(output):
@@ -244,7 +276,7 @@ def _last_json_object(output):
 def cloud_add(text):
     """Adds an EXISTING cloud session, given its link or id (copied from
     the Claude app / claude.ai/code), and selects it."""
-    global current_cloud
+    global current_cloud, current_repo
     match = CLOUD_ID_RE.search(text)
     if match is None:
         return None
@@ -253,6 +285,7 @@ def cloud_add(text):
     _save_cloud_session(session_id, "Session " + session_id[:16], url_match.group(0) if url_match else None)
     with lock:
         current_cloud = session_id
+        current_repo = _session_entry(session_id).get("repo")
         _save_state()
     return session_id
 
@@ -295,32 +328,51 @@ def cloud_send(text, command=False):
     command=True: `text` is a slash command for the CURRENT session (e.g.
     `/model opus`); it never creates a session and leaves the session's
     name and rank in the list alone."""
-    global current_cloud, cloud_busy
+    global current_cloud, cloud_busy, github_error
     with lock:
         if cloud_busy:
             return {"ok": False, "error": "busy"}
         session_id = current_cloud
         model = current_model
+        repo, direct_now = current_repo, push_main
         if command and not session_id:
             return {"ok": False, "error": "aucune session en cours"}
         cloud_busy = True
     title = " ".join(text.split())[:50]
     try:
         if session_id:
-            result = _queue_followup(session_id, text)
+            sent = text
+            entry = _session_entry(session_id)
+            if not command and entry.get("repo"):
+                sent += _instructions(entry["repo"], entry.get("branch") or "main", entry.get("direct", True))
+            result = _queue_followup(session_id, sent)
             if not result["ok"]:
                 return {"ok": False, "error": result["error"]}
             if not command:
                 _save_cloud_session(session_id, title, result["url"])
             return {"ok": True, "session_id": session_id, "url": result["url"]}
-        _ensure_cloud_repo()
-        task = "Message : " + text if text.lstrip().startswith("-") else text
+        directory, branch = CLOUD_DIR, None
+        if repo:
+            # The session starts on the chosen repository: the cloud clones
+            # the same GitHub repo at the branch checked out in this local
+            # clone (needs Claude's own GitHub access, which the user grants).
+            try:
+                directory, branch = github.prepare_clone(repo, direct_now)
+            except github.GithubError as err:
+                github_error = str(err)
+                return {"ok": False, "error": f"dépôt {repo} : {err}"}
+            github_error = None
+        else:
+            _ensure_cloud_repo()
+        task = text + (_instructions(repo, branch, direct_now) if repo else "")
+        if task.lstrip().startswith("-"):
+            task = "Message : " + task
         command_line = ["claude"] + (["--model", model] if model else []) + ["--cloud", task]
         # Under `script` the CLI gets a full terminal including a
         # controlling one (a bare pty has none, and a program that opens
         # /dev/tty then fails); without `script` it just gets the pty.
         run = ["script", "-q", "-e", "-c", shlex.join(command_line), "/dev/null"] if shutil.which("script") else command_line
-        code, output, reason, timeline = _run_with_pty(run, CLOUD_DIR, 180, stop_after_session_id=True)
+        code, output, reason, timeline = _run_with_pty(run, directory, 180, stop_after_session_id=True)
         timed_out = reason == "timeout"
         _log_cloud("create", run, code, output, timeline)
         ids = CLOUD_ID_RE.findall(output)
@@ -337,7 +389,7 @@ def cloud_send(text, command=False):
         with lock:
             current_cloud = found
             _save_state()
-        _save_cloud_session(found, title, url)
+        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None)
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -362,14 +414,28 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/status":
             with lock:
                 model, cloud_session = current_model, current_cloud
-            self.reply_json({"version": BACKEND_VERSION, "model": model, "cloud_session": cloud_session})
+                repo, direct, problem = current_repo, push_main, github_error
+            login = github.account_snapshot()
+            self.reply_json({
+                "version": BACKEND_VERSION, "model": model, "cloud_session": cloud_session,
+                "repo": repo, "push_main": direct,
+                "github": {
+                    "connected": login is not None, "login": login,
+                },
+                "github_error": problem,
+            })
         elif self.path == "/api/cloud/sessions":
             self.reply_json(_load_cloud_sessions())
+        elif self.path == "/api/github/repos":
+            try:
+                self.reply_json({"ok": True, "repos": github.list_repos()})
+            except github.GithubError as err:
+                self.reply_json({"ok": False, "error": str(err)})
         else:
             self.send_error(404)
 
     def do_POST(self):
-        global current_model, current_cloud
+        global current_model, current_cloud, current_repo, push_main
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -389,6 +455,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with lock:
                 current_cloud = None if target == "new" else target
+                if target != "new":
+                    # A session belongs to the repository it was started on.
+                    current_repo = _session_entry(target).get("repo")
                 _save_state()
             self.reply_json({"accepted": True, "cloud_session": current_cloud})
         elif self.path == "/api/cloud/add":
@@ -406,6 +475,32 @@ class Handler(BaseHTTPRequestHandler):
                 current_model = requested or None
                 _save_state()
             self.reply_json({"accepted": True, "model": current_model})
+        elif self.path == "/api/repo":
+            # "" = the plain chat. Changing repository means the next
+            # message starts a NEW session: a session's repository is fixed
+            # when it starts.
+            requested = body.strip()
+            if requested and not github.REPO_RE.fullmatch(requested):
+                self.reply_json({"accepted": False, "reason": "invalid repository"})
+                return
+            with lock:
+                current_repo = requested or None
+                current_cloud = None
+                _save_state()
+            self.reply_json({"accepted": True, "repo": current_repo})
+        elif self.path == "/api/options":
+            try:
+                options = json.loads(body or "{}")
+            except ValueError:
+                options = None
+            if not isinstance(options, dict):
+                self.reply_json({"accepted": False, "reason": "invalid options"})
+                return
+            with lock:
+                if isinstance(options.get("push_main"), bool):
+                    push_main = options["push_main"]
+                _save_state()
+            self.reply_json({"accepted": True, "push_main": push_main})
         else:
             self.send_error(404)
 

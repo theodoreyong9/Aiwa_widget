@@ -15,6 +15,10 @@ class BusyException(message: String) : Exception(message)
  * from "not reachable" so callers can say what to actually do. */
 class BackendOutdatedException(message: String) : Exception(message)
 
+// A JSON null (or a missing key, or "") is Kotlin null; JSONObject.optString
+// alone would turn a JSON null into the text "null".
+private fun JSONObject.str(key: String): String? = if (isNull(key)) null else optString(key).ifEmpty { null }
+
 class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") : ClaudeBridge {
 
     // A raw ConnectException's message is plumbing, not something that
@@ -58,10 +62,16 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
 
     override suspend fun status(): BackendStatus = withContext(Dispatchers.IO) {
         val json = JSONObject(getText("/api/status"))
+        val github = json.optJSONObject("github")
         BackendStatus(
-            model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
+            model = json.str("model"),
             version = json.optInt("version", 0),
-            cloudSession = if (json.isNull("cloud_session")) null else json.optString("cloud_session").ifEmpty { null },
+            cloudSession = json.str("cloud_session"),
+            repo = json.str("repo"),
+            pushMain = json.optBoolean("push_main", true),
+            githubConnected = github?.optBoolean("connected", false) ?: false,
+            githubLogin = github?.str("login"),
+            githubError = json.str("github_error"),
         )
     }
 
@@ -79,6 +89,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
                 id = entry.getString("id"),
                 title = entry.optString("title", entry.getString("id")),
                 url = entry.optString("url"),
+                repo = entry.str("repo"),
             )
         }
     }
@@ -119,5 +130,28 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             if (error == "busy") throw BusyException("a cloud message is already being sent")
             CloudSendResult(ok = false, sessionId = null, url = null, error = error)
         }
+    }
+
+    // The repositories the connected GitHub account can push to.
+    override suspend fun githubRepos(): List<RepoInfo> = withContext(Dispatchers.IO) {
+        val json = JSONObject(getText("/api/github/repos"))
+        if (!json.optBoolean("ok", false)) throw IllegalStateException(json.optString("error", "liste des dépôts indisponible"))
+        val array = json.getJSONArray("repos")
+        (0 until array.length()).map {
+            val entry = array.getJSONObject(it)
+            RepoInfo(name = entry.getString("name"), isPrivate = entry.optBoolean("private", false))
+        }
+    }
+
+    // null = the plain chat. Changing repository means the next message
+    // starts a NEW session: a session's repository is fixed when it starts.
+    override suspend fun selectRepo(repo: String?) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/repo", repo ?: ""))
+    }
+
+    // true: Claude pushes straight to the main branch; false: to a work
+    // branch. Applies to sessions created afterwards.
+    override suspend fun setPushMain(pushMain: Boolean) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/options", JSONObject().put("push_main", pushMain).toString()))
     }
 }

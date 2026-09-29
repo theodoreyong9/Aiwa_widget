@@ -106,6 +106,36 @@ suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?
     }
 }
 
+/** null = the plain chat. The next message starts a NEW session on that repository. */
+suspend fun switchRepo(context: Context, bridge: ClaudeBridge, repo: String?) {
+    try {
+        bridge.selectRepo(repo)
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "changer de dépôt"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+}
+
+/** true: Claude pushes straight to the main branch; false: to a work branch. Applies to new sessions. */
+suspend fun switchPushMain(context: Context, bridge: ClaudeBridge, pushMain: Boolean) {
+    try {
+        bridge.setPushMain(pushMain)
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "changer le mode de push"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+}
+
+/** Opens a link in whatever handles it (the browser). */
+fun openUrl(context: Context, url: String): Boolean = try {
+    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    true
+} catch (err: ActivityNotFoundException) {
+    false
+}
+
 private const val CLAUDE_APP_PACKAGE = "com.anthropic.claude"
 
 /**

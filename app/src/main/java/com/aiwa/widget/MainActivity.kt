@@ -9,6 +9,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -228,7 +230,10 @@ Text("La conversation s'affiche dans l'appli Claude : envoie un message pour cr�
 if(state.cloudSessionId!=null){
 Button(onClick={if(!openClaudeApp(context))toastOnMain(context,"Impossible d'ouvrir l'appli Claude.")}){Text("Ouvrir Claude ↗")}
 }
-Spacer(Modifier.weight(1f))
+// GitHub settings take whatever room is left, scrollable.
+Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+GithubCard(state)
+}
 // The explicit button here became redundant once LaunchedEffect above
 // started firing the same launch automatically on every app open —
 // reported live as a fair "might as well remove it" once that was

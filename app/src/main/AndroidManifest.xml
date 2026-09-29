@@ -76,6 +76,10 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <activity android:name=".RepoPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <!-- The widget's "Claude ↗" button: no UI, opens the current cloud
              session in the Claude app (OpenClaudeActivity.kt). -->
         <activity android:name=".OpenClaudeActivity" android:exported="false"
