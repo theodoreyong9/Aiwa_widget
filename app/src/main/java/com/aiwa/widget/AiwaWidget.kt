@@ -32,11 +32,11 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.sample
 
 // ONE shape, not resizable (aiwa_widget_info.xml): four bands sharing the whole
-// height on a dark gradient card — the session (name, what is going on, the
-// round Claude button), repository and model, Push / Deploy / site / Actions,
+// height on a dark gradient card — the session (the YourMine logo that opens the
+// app, the name, what is going on, the round Claude button), repository and model, Push / Deploy / site / Actions,
 // and the big grey dictation button with its red dot. FullContent below. What
 // follows is the older two-row layout, kept as CompactContent for a launcher
-// whose cells are too small for four bands. Two rows on a dark card. Conversation: [A: opens the Aiwa app] [session ▾]
+// whose cells are too small for four bands. Two rows on a dark card. Conversation: [the logo: opens the Aiwa app] [session ▾]
 // [grey mic with a red recording dot] [model ▾] and, once there is a session,
 // the Claude button (a round orange spark; a red pill with a dot, and a red edge
 // on the card, while Claude waits for an answer). Project, when the widget is
@@ -152,7 +152,6 @@ private fun FullContent(state: AiwaState) {
     val warm = rgb(android.graphics.Color.rgb(232, 150, 124))
     val alertText = rgb(android.graphics.Color.rgb(255, 138, 133))
     val pill = rgb(android.graphics.Color.rgb(44, 44, 54))
-    val neutral = rgb(android.graphics.Color.rgb(58, 58, 70))
     val micGrey = rgb(android.graphics.Color.rgb(84, 84, 94))
     val claudeOrange = rgb(android.graphics.Color.rgb(204, 120, 92))
     val alertRed = rgb(android.graphics.Color.rgb(214, 69, 65))
@@ -225,15 +224,12 @@ private fun FullContent(state: AiwaState) {
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
         Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = GlanceModifier.size(avatar.dp)
-                    .background(neutral)
-                    .cornerRadius((avatar / 2).dp)
-                    .clickable(actionStartActivity<MainActivity>()),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("A", style = TextStyle(color = warm, fontSize = (avatar * 0.42f).sp, fontWeight = FontWeight.Bold))
-            }
+            // The YourMine logo (a round PNG with real transparency): opens the app.
+            Image(
+                provider = ImageProvider(R.drawable.yourmine_logo),
+                contentDescription = "Ouvrir Aiwa",
+                modifier = GlanceModifier.size(avatar.dp).clickable(actionStartActivity<MainActivity>()),
+            )
             Spacer(GlanceModifier.width(8.dp))
             Column(
                 modifier = GlanceModifier.defaultWeight().clickable(actionStartActivity<SessionPickerActivity>()),
@@ -334,14 +330,12 @@ private fun FullContent(state: AiwaState) {
 private fun CompactContent(state: AiwaState) {
     val fg = rgb(android.graphics.Color.rgb(240, 240, 245))
     val pill = rgb(android.graphics.Color.rgb(44, 44, 54))
-    val neutral = rgb(android.graphics.Color.rgb(58, 58, 70))
     val micGrey = rgb(android.graphics.Color.rgb(84, 84, 94))
     val claudeOrange = rgb(android.graphics.Color.rgb(204, 120, 92))
     val alertRed = rgb(android.graphics.Color.rgb(214, 69, 65))
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
     val mint = rgb(android.graphics.Color.rgb(221, 243, 230))
     val mintText = rgb(android.graphics.Color.rgb(17, 51, 31))
-    val brand = rgb(android.graphics.Color.rgb(232, 150, 124))
     val size = LocalSize.current
     val fontScale = LocalContext.current.resources.configuration.fontScale
     // Room for the second row (two rows of buttons plus the padding).
@@ -382,15 +376,11 @@ private fun CompactContent(state: AiwaState) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = GlanceModifier.size(36.dp)
-                    .background(neutral)
-                    .cornerRadius(18.dp)
-                    .clickable(actionStartActivity<MainActivity>()),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("A", style = TextStyle(color = brand, fontSize = 16.sp, fontWeight = FontWeight.Bold))
-            }
+            Image(
+                provider = ImageProvider(R.drawable.yourmine_logo),
+                contentDescription = "Ouvrir Aiwa",
+                modifier = GlanceModifier.size(36.dp).clickable(actionStartActivity<MainActivity>()),
+            )
             Spacer(GlanceModifier.width(GAP.dp))
             Chip(sessionText, pill, fg, actionStartActivity<SessionPickerActivity>(), GlanceModifier.defaultWeight(), bold = true, alignStart = true)
             Spacer(GlanceModifier.width(GAP.dp))

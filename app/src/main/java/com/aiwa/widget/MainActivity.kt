@@ -30,7 +30,8 @@ class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:
  * The app is a full-page text field and a send button, nothing else (asked for:
  * "uniquement un champ texte pleine page et envoi"). Everything else lives on the
  * widget: session, model, mic, repository, Push, Deploy, the links, "Claude ↗".
- * One thin line above the field appears only when there is something to say
+ * A banner at the top says that every function is in the widget, to be put on the
+ * home screen. One thin line above the field appears only when there is something to say
  * (backend starting or down, a real error). Opening this screen still does the
  * setup work below: the Termux permission request (only an Activity can show
  * it), starting the backend and the keep-alive service, the version check.
@@ -154,6 +155,15 @@ else->notice
 }
 val problem=state.backend=="down"||(state.backend!="starting"&&notice!=null)
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+// Asked for: say at the top that every function lives in the widget, to be put on the home screen.
+Surface(shape=MaterialTheme.shapes.medium,color=MaterialTheme.colorScheme.secondaryContainer,modifier=Modifier.fillMaxWidth()){
+Text(
+"Toutes les fonctions d'Aiwa (sessions, modèle, dépôt, Push, Deploy, micro…) sont dans le widget : ajoute-le à ton écran d'accueil. Cette page sert seulement à écrire un message.",
+modifier=Modifier.padding(12.dp),
+style=MaterialTheme.typography.bodyMedium,
+color=MaterialTheme.colorScheme.onSecondaryContainer,
+)
+}
 if(note!=null)Text(note,style=MaterialTheme.typography.bodySmall,color=if(problem)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
 OutlinedTextField(
 value=input,
