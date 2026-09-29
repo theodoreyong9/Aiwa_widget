@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
+import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.LocalClaudeBridge
 
 val SessionIdKey = ActionParameters.Key<String>("sessionId")
@@ -87,14 +88,18 @@ class OpenSessionInTermuxAction : ActionCallback {
                 AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = "Impossible d'ouvrir Termux : ${err.message}") }
             }
         }
-        // Reported live: "la synchronisation n'est pas top" — updateAll()
-        // (every instance) reliably worked elsewhere (refreshWidget()
-        // after a send), but here the known-working ToggleSessionsAction
-        // uses .update(context, glanceId) on this SPECIFIC tapped
-        // instance instead — using the same targeted call here too,
-        // alongside provideGlance no longer writing session state back
-        // into the shared AiwaRepository singleton (see AiwaWidget.kt),
-        // removes the race that could leave a stale header on screen.
-        AiwaWidget().update(context, glanceId)
+        // Reported live: switching this to .update(context, glanceId)
+        // (matching ToggleSessionsAction) made sync WORSE, not better —
+        // "la session du widget ne se synchronise plus jamais avec
+        // l'appli". Likely cause: this callback now awaits THREE
+        // sequential network calls (selectSession, fetchHistory, the
+        // Termux intent) before reaching this line, widening the window
+        // for the specific glanceId captured at tap time to go stale —
+        // whereas updateAll() resolves every CURRENT instance id fresh
+        // at call time instead of relying on one held across that now-
+        // longer async gap. Reverted to updateAll(); the real race fix
+        // (provideGlance never writing session state back into the
+        // shared AiwaRepository singleton) stays in AiwaWidget.kt.
+        AiwaWidget().updateAll(context)
     }
 }

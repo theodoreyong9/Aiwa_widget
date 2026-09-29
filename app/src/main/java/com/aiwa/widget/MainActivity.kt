@@ -3,7 +3,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -61,30 +60,34 @@ sendAndTrack(context,bridge,text)
 refreshWidget()
 }
 }
-// Real speech-to-text via Android's own system recognizer — the
-// previous 🎙️ icon (on the widget, and implicitly here) never called
-// any STT API at all; this is the first real implementation. Needs
-// RECORD_AUDIO (see AndroidManifest.xml) and a real speech-recognition
-// service on the device (Google's app on most real phones); if
-// neither is present the launched intent itself will fail visibly
-// rather than silently doing nothing.
-val speechLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){result->
-val heard=result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-if(!heard.isNullOrBlank()){
-input=heard
-doSend(heard)
-input=""
-}
-}
+// Reported live, twice, insistently: "le micro enregistre et envoie
+// lorsqu'il entend 'c'est bon vas-y'" — the previous one-shot
+// RecognizerIntent sent as soon as ITS OWN silence-detection decided
+// the user had stopped talking, which fired on a normal thinking pause
+// just as easily as on actually being done. StopPhraseListener (shared
+// with the widget's own mic, DictateActivity) keeps re-listening until
+// the stop phrase is actually heard. listeningPartial!=null means it's
+// currently active; its own text is shown live below instead of in the
+// message field, since nothing has actually been "typed" yet.
+var micListener by remember{mutableStateOf<StopPhraseListener?>(null)}
+var listeningPartial by remember{mutableStateOf<String?>(null)}
+fun stopListening(){micListener?.cancel();micListener=null;listeningPartial=null}
 fun launchDictation(){
-val intent=Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply{putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)}
-try{speechLauncher.launch(intent)}catch(err:Exception){reportError(err)}
+listeningPartial=""
+micListener=StopPhraseListener(
+context=context,
+onPartial={listeningPartial=it},
+onFinalText={text->listeningPartial=null;micListener=null;doSend(text)},
+onGiveUp={listeningPartial=null;micListener=null},
+)
+micListener?.start()
 }
 val micPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->if(granted)launchDictation()}
 fun startDictation(){
 val granted=ContextCompat.checkSelfPermission(context,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
 if(granted)launchDictation() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
 }
+DisposableEffect(Unit){onDispose{micListener?.cancel()}}
 // Reported live: "Not allowed to start service Intent ... without
 // permission com.termux.permission.RUN_COMMAND" — declaring the
 // permission in the manifest was never enough on its own; like
@@ -221,6 +224,31 @@ Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
 // session/mic/response (explicit request for a minimal design), so it
 // no longer has its own separate start-backend button either —
 // StartBackendAction.kt was removed as dead code.
+// Reported live, twice: dictation must not send on a normal pause —
+// listeningPartial!=null replaces the input row with a live "still
+// listening" card instead, since StopPhraseListener has no default
+// dialog of its own (see its own HONEST LIMIT comment) and nothing
+// visible would leave the user unsure whether they're still heard.
+if(listeningPartial!=null){
+Surface(shape=MaterialTheme.shapes.medium,tonalElevation=4.dp){
+Column(Modifier.padding(12.dp)){
+Text("🎙️ Écoute… dis « c'est bon vas-y » pour envoyer")
+if(!listeningPartial.isNullOrBlank()){
+Spacer(Modifier.height(4.dp))
+Text(listeningPartial!!)
+}
+Spacer(Modifier.height(4.dp))
+Row{
+TextButton(onClick={stopListening()}){Text("Annuler")}
+TextButton(onClick={
+val heard=listeningPartial
+stopListening()
+if(!heard.isNullOrBlank())doSend(heard)
+}){Text("Envoyer maintenant")}
+}
+}
+}
+} else {
 // Reported live: "je les veux à droite du champ écrire, pas invisible
 // quand le clavier s'ouvre" — the mic/send buttons used to sit in
 // their own Row BELOW the full-width text field, which the keyboard
@@ -239,6 +267,7 @@ input=""
 // ({"accepted": false, "reason": "not wired yet"}) until its real
 // transport is verified — see docs/claude-code.md. A button that
 // always silently fails is worse than no button.
+}
 }
 }
 }
