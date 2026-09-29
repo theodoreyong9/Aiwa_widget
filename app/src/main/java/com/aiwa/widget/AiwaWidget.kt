@@ -172,7 +172,7 @@ private fun Content(state: AiwaState) {
             if (state.repo != null) {
                 Spacer(GlanceModifier.width(6.dp))
                 Text(
-                    text = if (state.pushMain) "Push ●" else "Push ○",
+                    text = if (state.pushMain) "Push: main" else "Push: branche",
                     style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     maxLines = 1,
                     modifier = GlanceModifier
@@ -192,15 +192,20 @@ private fun Content(state: AiwaState) {
                         .padding(horizontal = 11.dp, vertical = 11.dp)
                         .clickable(actionRunCallback<ToggleAutodeployCallback>()),
                 )
+                // The address is known as soon as a repository is chosen
+                // (https://<owner>.github.io/<repo>/): the button is there
+                // once deployment is asked for, or as soon as the address
+                // answers. Orange = it answers; grey = not (yet) — it still opens.
                 val site = state.siteUrl
-                if (state.autodeploy && site != null && state.siteState == "live") {
+                val live = state.siteState == "live"
+                if (site != null && (state.autodeploy || live)) {
                     Spacer(GlanceModifier.width(6.dp))
                     Text(
-                        text = "Site ↗",
+                        text = if (live) "Site ↗" else "Site … ↗",
                         style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                         maxLines = 1,
                         modifier = GlanceModifier
-                            .background(claudeOrange)
+                            .background(if (live) claudeOrange else pill)
                             .cornerRadius(20.dp)
                             .padding(horizontal = 11.dp, vertical = 11.dp)
                             .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),

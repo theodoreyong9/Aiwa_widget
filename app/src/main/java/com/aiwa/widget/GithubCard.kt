@@ -47,8 +47,8 @@ private fun alertText(state: AiwaState): String {
 }
 
 private fun siteText(state: AiwaState): String = when (state.siteState) {
-    "live" -> "Site en ligne : ${state.siteUrl}"
-    "waiting" -> "Site pas encore en ligne (${state.siteUrl}) : Claude Code le publie, le lien apparaîtra dans le widget dès que l'adresse répond."
+    "live" -> "En ligne : l'adresse répond."
+    "waiting" -> "Pas de réponse pour l'instant (pas encore déployé, ou déploiement en cours)."
     else -> ""
 }
 
@@ -117,9 +117,10 @@ fun GithubCard(state: AiwaState) {
                     Switch(checked = state.pushMain, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, pushMain = next) } })
                 }
                 Text(
-                    "Activé : Claude fait ses commits et les pousse directement sur la branche principale, sans pull request. " +
-                        "Désactivé : il travaille sur une branche à part (aiwa/date) et ne touche pas à la principale ; tu fusionnes toi-même. " +
-                        "S'applique dès ton prochain message, même dans la session en cours.",
+                    "Dans les deux cas Claude pousse : la différence, c'est où. Activé (« Push: main ») : directement sur la branche principale, " +
+                        "sans pull request. Désactivé (« Push: branche ») : sur une branche à part (aiwa/date), la principale n'est pas touchée. " +
+                        "Quand tu repasses en direct, Claude doit d'abord rapatrier sur la principale ce qui est resté sur la branche de travail : " +
+                        "au final tout est sur la principale. S'applique dès ton prochain message, même dans la session en cours.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -132,11 +133,19 @@ fun GithubCard(state: AiwaState) {
                         "il te dit le réglage à faire. Le bouton « Site ↗ » apparaît quand l'adresse publique répond.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                val site = siteText(state)
-                if (site.isNotEmpty()) Text(site)
+                // The address is known as soon as a repository is chosen.
                 val url = state.siteUrl
-                if (state.siteState == "live" && url != null) {
-                    Button(onClick = { openUrl(context, url) }) { Text("Ouvrir le site ↗") }
+                if (url != null) {
+                    Text("Adresse du site : $url")
+                    val status = siteText(state)
+                    if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { openUrl(context, url) }) { Text("Ouvrir ↗") }
+                        Button(onClick = {
+                            copyToClipboard(context, url)
+                            toastOnMain(context, "Adresse copiée")
+                        }) { Text("Copier") }
+                    }
                 }
             }
             Text("Alerte « Claude attend »", style = MaterialTheme.typography.titleSmall)

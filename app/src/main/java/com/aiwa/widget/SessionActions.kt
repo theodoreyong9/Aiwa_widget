@@ -1,5 +1,6 @@
 package com.aiwa.widget
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -195,6 +196,12 @@ suspend fun addRepoFromText(context: Context, bridge: ClaudeBridge, text: String
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
+}
+
+/** Puts text on the clipboard. */
+fun copyToClipboard(context: Context, text: String) {
+    val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    manager.setPrimaryClip(ClipData.newPlainText("Aiwa", text))
 }
 
 /** Opens a link in whatever handles it (the browser). */

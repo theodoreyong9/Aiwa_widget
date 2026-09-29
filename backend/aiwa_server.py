@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 9
+BACKEND_VERSION = 10
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -280,14 +280,16 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
         entries = _load_cloud_sessions()
         existing = next((e for e in entries if e.get("id") == session_id), None) or {}
         entries = [e for e in entries if e.get("id") != session_id]
-        entry = {
+        # Everything already known is kept (work branch, what to merge back,
+        # ...), whatever this call is about; only what is given changes.
+        entry = dict(existing)
+        entry.update({
             "id": session_id,
             "title": existing.get("title") or title,
             "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
-        }
+        })
         # model / effort: "" = automatic, absent = unknown.
         for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort), ("home", home)):
-            value = existing.get(key) if value is None else value
             if value is not None:
                 entry[key] = value
         entries.insert(0, entry)
@@ -334,7 +336,7 @@ def _known_repos():
 _INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "alert": "alerte", "extra": "consigne perso"}
 
 
-def _instruction_lines(repo, branch, direct):
+def _instruction_lines(repo, branch, direct, merge_from=None):
     """What the user's switches ask of Claude Code, in words, as (key, text)
     pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
@@ -343,9 +345,20 @@ def _instruction_lines(repo, branch, direct):
     if repo:
         lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
         if direct:
-            lines.append(("push", f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request)."))
+            text = f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request)."
+            if merge_from:
+                # Coming back from a work branch: nothing done there may be left behind.
+                text += (
+                    f" Avant cela, rapatrie sur {branch} tout ce qui a été fait sur la branche de travail {merge_from} "
+                    f"(merge ou fast-forward, sans perdre aucun commit), puis pousse : au final tout doit être sur {branch}."
+                )
+            lines.append(("push", text))
         else:
-            lines.append(("push", f"Push : travaille sur la branche {branch} (crée-la depuis la branche par défaut si elle n'existe pas), commit et push dessus, sans toucher à la branche principale."))
+            lines.append((
+                "push",
+                f"Push : travaille sur la branche {branch} (si elle existe déjà, reprends-la après l'avoir mise à jour avec la branche principale ; "
+                "sinon crée-la depuis la branche par défaut), commit et push dessus, sans toucher à la branche principale.",
+            ))
         if deploy:
             lines.append((
                 "deploy",
@@ -373,7 +386,7 @@ def _compose(entry, repo, branch, direct):
     FIRST message; after that only what changed since — a new or altered
     instruction, or a note that one was withdrawn — and nothing at all when
     nothing changed, so the conversation isn't buried in repeats."""
-    lines = _instruction_lines(repo, branch, direct)
+    lines = _instruction_lines(repo, branch, direct, (entry or {}).get("merge_from"))
     told = {key: hashlib.sha1(text.encode()).hexdigest()[:8] for key, text in lines}
     previous = (entry or {}).get("instr")
     if not isinstance(previous, dict) or not previous:
@@ -407,15 +420,24 @@ def _last_json_object(output):
 
 
 def _retarget_session(session_id, direct):
-    """Push switched while a repository session is open: from its next
-    message Claude is told the new target — the session's home branch
-    (direct), or a fresh aiwa/<date> branch to create (work branch)."""
+    """Push switched while a repository session is open. From its next
+    message Claude is told the new target:
+     - work branch: the session's ONE work branch (created the first time,
+       reused afterwards, so switching back and forth doesn't scatter work
+       over many branches);
+     - direct: the session's home branch — and, when it comes from a work
+       branch, to bring everything done there back onto it first. Either
+       way every commit ends up pushed; what differs is where, meanwhile."""
     entry = _session_entry(session_id)
     repo = entry.get("repo")
     if not repo:
         return
-    branch = (entry.get("home") or github.default_branch(repo)) if direct else "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
-    _update_session(session_id, direct=direct, branch=branch)
+    if direct:
+        came_from = entry.get("branch") if entry.get("direct") is False else None
+        _update_session(session_id, direct=True, branch=entry.get("home") or github.default_branch(repo), merge_from=came_from)
+    else:
+        work = entry.get("work") or "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
+        _update_session(session_id, direct=False, branch=work, work=work, merge_from=None)
 
 
 def _branch_candidates():
@@ -590,6 +612,8 @@ def cloud_send(text, command=False):
             current_cloud = last_cloud = found
             _save_state()
         _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "", home=base)
+        if repo and not direct_now:
+            _update_session(found, work=branch)
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -608,18 +632,19 @@ def _site_probe(url):
 
 
 def _site_snapshot():
-    """Whether the Pages address of the current repository answers: off
-    (deployment not asked), waiting, live. Probed in the background — this
-    is called on every /api/status."""
+    """The GitHub Pages address of the current repository — known in
+    advance (https://<owner>.github.io/<repo>/) — and whether it answers:
+    off (no repository), waiting or live. Probed in the background; this is
+    called on every /api/status."""
     with lock:
-        repo, wanted = current_repo, autodeploy
-    if not repo or not wanted:
+        repo = current_repo
+    if not repo:
         return {"url": None, "state": "off"}
     url = github.pages_url(repo)
     with site_lock:
         fresh = site_cache["url"] == url
         state = site_cache["state"] if fresh else "waiting"
-        ttl = 120 if state == "live" else 15
+        ttl = 120 if state == "live" else 30
         if (not fresh or time.time() - site_cache["at"] > ttl) and not site_cache["busy"]:
             site_cache["busy"] = True
             threading.Thread(target=_site_probe, args=(url,), daemon=True).start()
