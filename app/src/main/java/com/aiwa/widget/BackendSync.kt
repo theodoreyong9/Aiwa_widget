@@ -40,8 +40,11 @@ object BackendSync {
                     backendVersion = status.version,
                     repo = status.repo,
                     pushMain = status.pushMain,
-                    githubConnected = status.githubConnected,
-                    githubLogin = status.githubLogin,
+                    autodeploy = status.autodeploy,
+                    notifyAsk = status.notify,
+                    extra = status.extra,
+                    siteUrl = status.site.url,
+                    siteState = status.site.state,
                     githubError = status.githubError,
                 )
             }

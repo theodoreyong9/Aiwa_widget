@@ -1,5 +1,7 @@
 package com.aiwa.widget
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -27,8 +29,8 @@ import kotlinx.coroutines.flow.sample
 
 // A compact row of buttons — [A: opens the Aiwa app] [session ▾] [grey
 // mic with a red recording dot] [model ▾] and, once there is a session to
-// read, [Claude ↗]. When the widget is tall enough a second row shows the
-// GitHub repository the next session starts on and the push mode.
+// read, [Claude ↗]. When the widget is tall enough a second row holds the
+// GitHub instructions: [repository ▾] [Push] [Deploy] and [Site ↗].
 // No conversation text: a cloud session's replies can't be read back by a
 // program, so they live in the Claude app and "Claude ↗" opens them. Each ▾
 // button opens a small floating picker window (Pickers.kt): a widget cannot
@@ -145,43 +147,58 @@ private fun Content(state: AiwaState) {
     }
     if (tall) {
         Spacer(GlanceModifier.height(6.dp))
+        // The buttons appear as you go: the repository picker first, then
+        // (once a repository is chosen) push mode and deployment, then (once
+        // the Pages address answers) the link to the site. They are
+        // instructions integrated into the conversation — Claude Code does
+        // the work itself.
         Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            // GitHub: which repository the next session starts on, and
-            // whether Claude pushes straight to its main branch.
-            if (!state.githubConnected) {
+            val repoLabel = state.repo?.substringAfter('/')?.take(22) ?: "GitHub"
+            Text(
+                text = "⎇ $repoLabel  ▾",
+                style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                maxLines = 1,
+                modifier = GlanceModifier.defaultWeight()
+                    .background(pill)
+                    .cornerRadius(20.dp)
+                    .padding(horizontal = 11.dp, vertical = 11.dp)
+                    .clickable(actionStartActivity<RepoPickerActivity>()),
+            )
+            if (state.repo != null) {
+                Spacer(GlanceModifier.width(6.dp))
                 Text(
-                    text = "GitHub : à connecter (ouvre Aiwa)",
+                    text = if (state.pushMain) "Push ●" else "Push ○",
                     style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     maxLines = 1,
-                    modifier = GlanceModifier.defaultWeight()
-                        .background(pill)
+                    modifier = GlanceModifier
+                        .background(if (state.pushMain) green else pill)
                         .cornerRadius(20.dp)
                         .padding(horizontal = 11.dp, vertical = 11.dp)
-                        .clickable(actionStartActivity<MainActivity>()),
+                        .clickable(actionRunCallback<TogglePushMainCallback>()),
                 )
-            } else {
-                val repoLabel = state.repo?.substringAfter('/')?.take(22) ?: "Aucun dépôt"
+                Spacer(GlanceModifier.width(6.dp))
                 Text(
-                    text = "⎇ $repoLabel  ▾",
+                    text = if (state.autodeploy) "Deploy ●" else "Deploy ○",
                     style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     maxLines = 1,
-                    modifier = GlanceModifier.defaultWeight()
-                        .background(pill)
+                    modifier = GlanceModifier
+                        .background(if (state.autodeploy) green else pill)
                         .cornerRadius(20.dp)
                         .padding(horizontal = 11.dp, vertical = 11.dp)
-                        .clickable(actionStartActivity<RepoPickerActivity>()),
+                        .clickable(actionRunCallback<ToggleAutodeployCallback>()),
                 )
-                if (state.repo != null) {
+                val site = state.siteUrl
+                if (state.autodeploy && site != null && state.siteState == "live") {
                     Spacer(GlanceModifier.width(6.dp))
                     Text(
-                        text = if (state.pushMain) "Push direct ●" else "Push direct ○",
+                        text = "Site ↗",
                         style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                         maxLines = 1,
                         modifier = GlanceModifier
-                            .background(if (state.pushMain) green else pill)
+                            .background(claudeOrange)
                             .cornerRadius(20.dp)
                             .padding(horizontal = 11.dp, vertical = 11.dp)
-                            .clickable(actionRunCallback<TogglePushMainCallback>()),
+                            .clickable(actionStartActivity(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),
                     )
                 }
             }
@@ -190,9 +207,15 @@ private fun Content(state: AiwaState) {
     }
 }
 
-// The widget's "Push direct" button: flips the mode without opening anything.
+// The widget's "Push" and "Deploy" buttons flip an instruction without opening anything.
 class TogglePushMainCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        switchPushMain(context, LocalClaudeBridge(), !AiwaRepository.state.value.pushMain)
+        switchOptions(context, LocalClaudeBridge(), pushMain = !AiwaRepository.state.value.pushMain)
+    }
+}
+
+class ToggleAutodeployCallback : ActionCallback {
+    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
+        switchOptions(context, LocalClaudeBridge(), autodeploy = !AiwaRepository.state.value.autodeploy)
     }
 }

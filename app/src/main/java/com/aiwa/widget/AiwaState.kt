@@ -38,13 +38,18 @@ data class AiwaState(
     val cloudSessions: List<CloudSessionInfo> = emptyList(),
     val model: String? = null,
     val backendVersion: Int = 0,
-    // GitHub: the repository new sessions start on (null = the plain chat),
-    // whether Claude pushes straight to its main branch, and the state of
-    // the `gh` login the user made in Termux.
+    // Instructions integrated into the conversation — Claude Code does the
+    // work itself: the repository new sessions start on (null = the plain
+    // chat), push straight to the main branch, publish with GitHub Pages,
+    // alert when it needs an answer, plus the user's own text. siteState:
+    // off / waiting / live (whether the Pages address answers).
     val repo: String? = null,
     val pushMain: Boolean = true,
-    val githubConnected: Boolean = false,
-    val githubLogin: String? = null,
+    val autodeploy: Boolean = false,
+    val notifyAsk: Boolean = false,
+    val extra: String = "",
+    val siteUrl: String? = null,
+    val siteState: String = "off",
     val githubError: String? = null,
     val status: Status = Status.READY,
     // The last problem worth telling the user about, shown in the app only

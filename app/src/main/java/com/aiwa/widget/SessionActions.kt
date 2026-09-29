@@ -27,6 +27,10 @@ private fun describeFailure(context: Context, err: Exception, what: String): Str
 // Same shape the backend accepts (session_… / cse_… ids).
 val CLOUD_ID_IN_TEXT = Regex("(?:session|cse)_[A-Za-z0-9]+")
 
+// A GitHub repository in a link or a git remote, or a plain owner/name —
+// the shapes the backend accepts.
+val GITHUB_REPO_IN_TEXT = Regex("github\\.com[/:][A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|^\\s*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\s*$")
+
 /**
  * The text on the clipboard, if any. Must be called from a foreground
  * activity on the main thread (Android only hands the clipboard to the
@@ -117,12 +121,34 @@ suspend fun switchRepo(context: Context, bridge: ClaudeBridge, repo: String?) {
     AiwaWidget().updateAll(context)
 }
 
-/** true: Claude pushes straight to the main branch; false: to a work branch. Applies to new sessions. */
-suspend fun switchPushMain(context: Context, bridge: ClaudeBridge, pushMain: Boolean) {
+/**
+ * Changes the instructions integrated into the conversation; only the
+ * arguments that are not null. They apply to the next message (and, for
+ * the push mode, to the next new session).
+ */
+suspend fun switchOptions(
+    context: Context,
+    bridge: ClaudeBridge,
+    pushMain: Boolean? = null,
+    autodeploy: Boolean? = null,
+    notify: Boolean? = null,
+    extra: String? = null,
+) {
     try {
-        bridge.setPushMain(pushMain)
+        bridge.setOptions(pushMain, autodeploy, notify, extra)
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer le mode de push"))
+        toastOnMain(context, describeFailure(context, err, "changer les consignes"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+}
+
+/** A repository given as a GitHub link or owner/name (e.g. copied from the browser): remembered and selected. */
+suspend fun addRepoFromText(context: Context, bridge: ClaudeBridge, text: String) {
+    try {
+        bridge.addRepo(text)
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "ajouter le dépôt"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)

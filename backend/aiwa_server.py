@@ -19,6 +19,7 @@ account's repositories and tell Claude to push straight to it (or to a
 work branch).
 """
 import fcntl
+import hashlib
 import json
 import os
 import pty
@@ -51,6 +52,7 @@ BACKEND_VERSION = 6
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
+EXTRA_MAX = 600  # the user's own instruction text
 
 # A cloud session needs a git repository to start from. Documented: a
 # local repo with at least one commit is uploaded as a bundle, no GitHub
@@ -71,12 +73,22 @@ current_model = None
 # The cloud session messages go to; None = the next message creates one.
 current_cloud = None
 cloud_busy = False
-# GitHub: the repository new sessions start on ("owner/name"; None = the
-# plain chat) and whether Claude pushes straight to its main branch
-# (otherwise to a fresh aiwa/<date> branch).
+# Instructions integrated into the conversation (see _compose). Claude
+# Code does the work itself; these only tell it what the user wants:
+# current_repo: the repository new sessions start on ("owner/name"; None =
+# the plain chat); push_main: push straight to the main branch (otherwise
+# to a work branch); autodeploy: publish with GitHub Pages through GitHub
+# Actions; notify_ask: alert me when you need an answer; extra: free text.
 current_repo = None
 push_main = True
+autodeploy = False
+notify_ask = False
+extra = ""
 github_error = None  # the last GitHub problem worth showing in the app
+# Whether the Pages address of current_repo answers, probed in the background.
+site_lock = threading.Lock()
+site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
+REPOS_STORE = Path.home() / ".aiwa_repos.json"
 store_lock = threading.Lock()
 # Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
 # that follows a creation, for instance).
@@ -84,7 +96,7 @@ followup_lock = threading.Lock()
 
 
 def _load_state():
-    global current_model, current_cloud, current_repo, push_main
+    global current_model, current_cloud, current_repo, push_main, autodeploy, notify_ask, extra
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -95,6 +107,10 @@ def _load_state():
         current_cloud = cloud if isinstance(cloud, str) and CLOUD_ID_RE.fullmatch(cloud) else None
         current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
         push_main = data.get("push_main") is not False
+        autodeploy = data.get("autodeploy") is True
+        notify_ask = data.get("notify_ask") is True
+        text = data.get("extra")
+        extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
 
 
 def _save_state():
@@ -104,7 +120,7 @@ def _save_state():
     try:
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
-            "push_main": push_main,
+            "push_main": push_main, "autodeploy": autodeploy, "notify_ask": notify_ask, "extra": extra,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -227,10 +243,11 @@ def _load_cloud_sessions():
     return data if isinstance(data, list) else []
 
 
-def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None):
+def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None):
     """The CLI has no non-interactive way to LIST cloud sessions, so the
     ones Aiwa created or was given a link to are remembered here, with the
-    repository (and branch) a session was started on."""
+    repository (and branch) a session was started on and a fingerprint of
+    the instructions it was last given."""
     with store_lock:
         entries = _load_cloud_sessions()
         existing = next((e for e in entries if e.get("id") == session_id), None) or {}
@@ -240,7 +257,7 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
             "title": existing.get("title") or title,
             "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
         }
-        for key, value in (("repo", repo), ("branch", branch), ("direct", direct)):
+        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr)):
             value = existing.get(key) if value is None else value
             if value is not None:
                 entry[key] = value
@@ -252,14 +269,76 @@ def _session_entry(session_id):
     return next((e for e in _load_cloud_sessions() if e.get("id") == session_id), {})
 
 
-def _instructions(repo, branch, direct):
-    """Appended to every message sent in a repository session."""
-    lines = [f"[Aiwa] Dépôt de travail : {repo}."]
-    if direct:
-        lines.append(f"Quand tu as terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request).")
-    else:
-        lines.append(f"Travaille sur la branche {branch} (déjà créée) : commit et push dessus, ne touche pas à la branche principale.")
-    return "\n\n" + "\n".join(lines)
+def _remember_repo(repo):
+    """The repositories offered in the picker: the ones used or added."""
+    with store_lock:
+        try:
+            known = json.loads(REPOS_STORE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            known = []
+        known = [repo] + [r for r in known if isinstance(r, str) and r != repo]
+        try:
+            REPOS_STORE.write_text(json.dumps(known[:30]), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _known_repos():
+    try:
+        known = json.loads(REPOS_STORE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        known = []
+    return [r for r in known if isinstance(r, str) and github.REPO_RE.fullmatch(r)]
+
+
+def _instruction_lines(repo, branch, direct):
+    """What the user's switches ask of Claude Code, in words. Claude Code
+    does all of it itself, with its own GitHub access."""
+    with lock:
+        deploy, alert, own = autodeploy, notify_ask, extra
+    lines = []
+    if repo:
+        lines.append(f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi.")
+        if direct:
+            lines.append(f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request).")
+        else:
+            lines.append(f"Push : travaille sur la branche {branch} (crée-la depuis la branche par défaut si elle n'existe pas), commit et push dessus, sans toucher à la branche principale.")
+        if deploy:
+            lines.append(
+                f"Déploiement : le site est publié par GitHub Pages via GitHub Actions, à l'adresse {github.pages_url(repo)}. "
+                "S'il n'y a pas encore de workflow Pages (actions/configure-pages, upload-pages-artifact, deploy-pages, déclenché à chaque push sur la branche principale), ajoute-le ; pas de branche gh-pages. "
+                "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi."
+            )
+    if alert:
+        lines.append("Alerte : quand tu as terminé ou que tu attends une décision ou une réponse de ma part, envoie-moi une notification push si un outil te le permet, et termine par une question claire.")
+    if own:
+        lines.append(f"Consigne perso : {own}")
+    return lines
+
+
+def _compose(entry, repo, branch, direct):
+    """The instructions added to a message, and their fingerprint. The full
+    block goes with a session's first message and whenever it changed;
+    otherwise a one-line reminder, so the conversation isn't buried."""
+    lines = _instruction_lines(repo, branch, direct)
+    if not lines:
+        return "", None
+    fingerprint = hashlib.sha1("\n".join(lines).encode()).hexdigest()[:10]
+    previous = (entry or {}).get("instr")
+    if previous == fingerprint:
+        return f"\n\n[Aiwa] Mêmes consignes que précédemment{f' (dépôt {repo})' if repo else ''}.", fingerprint
+    header = "consignes mises à jour" if previous else "consignes de cette conversation"
+    return f"\n\n[Aiwa — {header}]\n" + "\n".join(f"- {line}" for line in lines), fingerprint
+
+
+def _preview():
+    """The full block the current settings would add, for the app to show."""
+    with lock:
+        repo, direct, session = current_repo, push_main, current_cloud
+    entry = _session_entry(session) if session else {}
+    branch = entry.get("branch") or "main"
+    text, _ = _compose({}, repo, branch, direct)
+    return text.strip()
 
 
 def _last_json_object(output):
@@ -341,30 +420,32 @@ def cloud_send(text, command=False):
     title = " ".join(text.split())[:50]
     try:
         if session_id:
-            sent = text
-            entry = _session_entry(session_id)
-            if not command and entry.get("repo"):
-                sent += _instructions(entry["repo"], entry.get("branch") or "main", entry.get("direct", True))
+            sent, fingerprint = text, None
+            if not command:
+                entry = _session_entry(session_id)
+                extra_text, fingerprint = _compose(entry, entry.get("repo"), entry.get("branch") or "main", entry.get("direct", True))
+                sent += extra_text
             result = _queue_followup(session_id, sent)
             if not result["ok"]:
                 return {"ok": False, "error": result["error"]}
             if not command:
-                _save_cloud_session(session_id, title, result["url"])
+                _save_cloud_session(session_id, title, result["url"], instr=fingerprint)
             return {"ok": True, "session_id": session_id, "url": result["url"]}
         directory, branch = CLOUD_DIR, None
         if repo:
             # The session starts on the chosen repository: the cloud clones
-            # the same GitHub repo at the branch checked out in this local
-            # clone (needs Claude's own GitHub access, which the user grants).
+            # the GitHub remote of this directory itself, with Claude's own
+            # access (the user grants it at claude.ai/connect-github).
             try:
-                directory, branch = github.prepare_clone(repo, direct_now)
+                directory, branch = github.prepare_repo_dir(repo, direct_now)
             except github.GithubError as err:
-                github_error = str(err)
-                return {"ok": False, "error": f"dépôt {repo} : {err}"}
+                github_error = f"dépôt {repo} : {err}"
+                return {"ok": False, "error": github_error}
             github_error = None
         else:
             _ensure_cloud_repo()
-        task = text + (_instructions(repo, branch, direct_now) if repo else "")
+        extra_text, fingerprint = _compose({}, repo, branch, direct_now)
+        task = text + extra_text
         if task.lstrip().startswith("-"):
             task = "Message : " + task
         command_line = ["claude"] + (["--model", model] if model else []) + ["--cloud", task]
@@ -389,7 +470,7 @@ def cloud_send(text, command=False):
         with lock:
             current_cloud = found
             _save_state()
-        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None)
+        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint)
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -399,6 +480,45 @@ def cloud_send(text, command=False):
     finally:
         with lock:
             cloud_busy = False
+
+
+def _site_probe(url):
+    answers = github.site_answers(url)
+    with site_lock:
+        site_cache.update(url=url, state="live" if answers else "waiting", at=time.time(), busy=False)
+
+
+def _site_snapshot():
+    """Whether the Pages address of the current repository answers: off
+    (deployment not asked), waiting, live. Probed in the background — this
+    is called on every /api/status."""
+    with lock:
+        repo, wanted = current_repo, autodeploy
+    if not repo or not wanted:
+        return {"url": None, "state": "off"}
+    url = github.pages_url(repo)
+    with site_lock:
+        fresh = site_cache["url"] == url
+        state = site_cache["state"] if fresh else "waiting"
+        ttl = 120 if state == "live" else 15
+        if (not fresh or time.time() - site_cache["at"] > ttl) and not site_cache["busy"]:
+            site_cache["busy"] = True
+            threading.Thread(target=_site_probe, args=(url,), daemon=True).start()
+    return {"url": url, "state": state}
+
+
+def _repo_choices():
+    """Known repositories first (most recently used), then the ones a
+    connected `gh` knows about, if there is one."""
+    seen, choices = set(), []
+    for name in _known_repos():
+        seen.add(name)
+        choices.append({"name": name, "private": False})
+    for item in github.gh_repos():
+        if item["name"] not in seen:
+            seen.add(item["name"])
+            choices.append(item)
+    return choices
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -415,27 +535,23 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 model, cloud_session = current_model, current_cloud
                 repo, direct, problem = current_repo, push_main, github_error
-            login = github.account_snapshot()
+                deploy, alert, own = autodeploy, notify_ask, extra
             self.reply_json({
                 "version": BACKEND_VERSION, "model": model, "cloud_session": cloud_session,
-                "repo": repo, "push_main": direct,
-                "github": {
-                    "connected": login is not None, "login": login,
-                },
-                "github_error": problem,
+                "repo": repo, "push_main": direct, "autodeploy": deploy, "notify": alert, "extra": own,
+                "site": _site_snapshot(), "github_error": problem,
             })
         elif self.path == "/api/cloud/sessions":
             self.reply_json(_load_cloud_sessions())
         elif self.path == "/api/github/repos":
-            try:
-                self.reply_json({"ok": True, "repos": github.list_repos()})
-            except github.GithubError as err:
-                self.reply_json({"ok": False, "error": str(err)})
+            self.reply_json({"ok": True, "repos": _repo_choices()})
+        elif self.path == "/api/instructions":
+            self.reply_json({"text": _preview()})
         else:
             self.send_error(404)
 
     def do_POST(self):
-        global current_model, current_cloud, current_repo, push_main
+        global current_model, current_cloud, current_repo, push_main, autodeploy, notify_ask, extra
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -487,7 +603,22 @@ class Handler(BaseHTTPRequestHandler):
                 current_repo = requested or None
                 current_cloud = None
                 _save_state()
+            if requested:
+                _remember_repo(requested)
             self.reply_json({"accepted": True, "repo": current_repo})
+        elif self.path == "/api/github/add":
+            # A repository given as a GitHub link or owner/name (copied from
+            # the browser or the Claude app): remembered, and selected.
+            added = github.parse_repo(body)
+            if added is None:
+                self.reply_json({"accepted": False, "reason": "no GitHub repository in that text"})
+                return
+            _remember_repo(added)
+            with lock:
+                current_repo = added
+                current_cloud = None
+                _save_state()
+            self.reply_json({"accepted": True, "repo": added})
         elif self.path == "/api/options":
             try:
                 options = json.loads(body or "{}")
@@ -499,8 +630,14 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if isinstance(options.get("push_main"), bool):
                     push_main = options["push_main"]
+                if isinstance(options.get("autodeploy"), bool):
+                    autodeploy = options["autodeploy"]
+                if isinstance(options.get("notify"), bool):
+                    notify_ask = options["notify"]
+                if isinstance(options.get("extra"), str):
+                    extra = options["extra"].strip()[:EXTRA_MAX]
                 _save_state()
-            self.reply_json({"accepted": True, "push_main": push_main})
+            self.reply_json({"accepted": True})
         else:
             self.send_error(404)
 

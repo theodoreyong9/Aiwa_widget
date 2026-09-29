@@ -1,13 +1,19 @@
 package com.aiwa.bridge
 
+// state: off (no deployment asked), waiting (the Pages address doesn't
+// answer yet) or live.
+data class SiteInfo(val url: String?, val state: String)
+
 data class BackendStatus(
     val model: String?,
     val version: Int,
     val cloudSession: String?,
     val repo: String? = null,
     val pushMain: Boolean = true,
-    val githubConnected: Boolean = false,
-    val githubLogin: String? = null,
+    val autodeploy: Boolean = false,
+    val notify: Boolean = false,
+    val extra: String = "",
+    val site: SiteInfo = SiteInfo(null, "off"),
     val githubError: String? = null,
 )
 
@@ -25,5 +31,12 @@ interface ClaudeBridge {
     suspend fun sendCloudCommand(text: String): CloudSendResult
     suspend fun githubRepos(): List<RepoInfo>
     suspend fun selectRepo(repo: String?)
-    suspend fun setPushMain(pushMain: Boolean)
+    suspend fun addRepo(text: String)
+
+    // The instructions integrated into the conversation. Only the ones that
+    // are not null are changed.
+    suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, notify: Boolean?, extra: String?)
+
+    // The block of instructions Claude Code would receive with the next message.
+    suspend fun instructions(): String
 }

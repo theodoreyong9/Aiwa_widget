@@ -62,15 +62,17 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
 
     override suspend fun status(): BackendStatus = withContext(Dispatchers.IO) {
         val json = JSONObject(getText("/api/status"))
-        val github = json.optJSONObject("github")
+        val site = json.optJSONObject("site")
         BackendStatus(
             model = json.str("model"),
             version = json.optInt("version", 0),
             cloudSession = json.str("cloud_session"),
             repo = json.str("repo"),
             pushMain = json.optBoolean("push_main", true),
-            githubConnected = github?.optBoolean("connected", false) ?: false,
-            githubLogin = github?.str("login"),
+            autodeploy = json.optBoolean("autodeploy", false),
+            notify = json.optBoolean("notify", false),
+            extra = json.str("extra") ?: "",
+            site = SiteInfo(site?.str("url"), site?.str("state") ?: "off"),
             githubError = json.str("github_error"),
         )
     }
@@ -149,9 +151,22 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         requireAccepted(postText("/api/repo", repo ?: ""))
     }
 
-    // true: Claude pushes straight to the main branch; false: to a work
-    // branch. Applies to sessions created afterwards.
-    override suspend fun setPushMain(pushMain: Boolean) = withContext(Dispatchers.IO) {
-        requireAccepted(postText("/api/options", JSONObject().put("push_main", pushMain).toString()))
+    // A repository given as a GitHub link or owner/name: remembered and selected.
+    override suspend fun addRepo(text: String) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/github/add", text))
+    }
+
+    // Only the options that are not null are changed.
+    override suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, notify: Boolean?, extra: String?) = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+        if (pushMain != null) body.put("push_main", pushMain)
+        if (autodeploy != null) body.put("autodeploy", autodeploy)
+        if (notify != null) body.put("notify", notify)
+        if (extra != null) body.put("extra", extra)
+        requireAccepted(postText("/api/options", body.toString()))
+    }
+
+    override suspend fun instructions(): String = withContext(Dispatchers.IO) {
+        JSONObject(getText("/api/instructions")).optString("text", "")
     }
 }

@@ -143,29 +143,24 @@ class RepoPickerActivity : ComponentActivity() {
         setContent {
             val state by AiwaRepository.state.collectAsState()
             var repos by remember { mutableStateOf<List<RepoInfo>?>(null) }
-            var problem by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(Unit) {
                 val bridge = LocalClaudeBridge()
                 BackendSync.refresh(bridge)
-                try {
-                    repos = bridge.githubRepos()
-                } catch (err: Exception) {
-                    problem = err.message ?: "erreur inconnue"
-                }
+                repos = try { bridge.githubRepos() } catch (err: Exception) { emptyList() }
             }
             val entries = buildList {
                 add(PickerEntry("Aucun dépôt (chat libre)", state.repo == null) { pickRepo(null) })
-                val list = repos
-                val failure = problem
-                if (list != null) {
-                    list.forEach { r ->
-                        add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
-                    }
-                } else if (failure != null) {
-                    add(PickerEntry(failure, false) { finish() })
-                } else {
-                    add(PickerEntry("Chargement des dépôts…", false) { })
+                repos?.forEach { r ->
+                    add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
                 }
+                if (repos == null) add(PickerEntry("Chargement des dépôts…", false) { })
+                // Claude Code works in the repository with its own GitHub
+                // access, so a repository is simply added by its link.
+                add(PickerEntry("＋  Ajouter un dépôt (lien copié)", false) { addFromClipboard() })
+                add(PickerEntry("↗  Autoriser Claude sur GitHub (une fois)", false) {
+                    openUrl(this@RepoPickerActivity, "https://claude.ai/connect-github")
+                    finish()
+                })
             }
             PickerSheet(entries) { finish() }
         }
@@ -175,5 +170,19 @@ class RepoPickerActivity : ComponentActivity() {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchRepo(appContext, LocalClaudeBridge(), repo) }
+    }
+
+    // Read here, on the main thread of the focused activity (the only place
+    // Android hands the clipboard over).
+    private fun addFromClipboard() {
+        val text = clipboardText(this)
+        if (text == null || !GITHUB_REPO_IN_TEXT.containsMatchIn(text)) {
+            toastOnMain(this, "Aucun lien de dépôt GitHub dans le presse-papiers : copie l'adresse du dépôt (github.com/proprietaire/nom).")
+            finish()
+            return
+        }
+        val appContext = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { addRepoFromText(appContext, LocalClaudeBridge(), text) }
     }
 }
