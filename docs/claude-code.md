@@ -1,5 +1,7 @@
 # Claude Code integration
 
+> **Superseded.** Everything below describes the local persistent `claude -p` process backend, which was removed: Aiwa now sends only to Claude Code cloud sessions (`claude --cloud`) — see the README. It is kept as a record of what was verified about that transport.
+
 Verified development transport: Claude Code 2.1.282 with `--resume`, stream-json input/output, partial messages and verbose mode.
 
 The hard-coded development session id this originally shipped with (`8aab65ab-182b-40ab-b163-30338c87d2f5`) is gone — `current_session` in `aiwa_server.py` now starts as `None` (a real, brand-new session on the first message) and is set either by a real pick from `/api/sessions` (which lists actual `~/.claude/projects/**/*.jsonl` transcripts) or automatically from a fresh run's own real `result.session_id`. Background instruction remains deliberately unimplemented until its supported transport is verified — see below.

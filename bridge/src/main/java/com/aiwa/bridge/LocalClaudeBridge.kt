@@ -2,42 +2,24 @@ package com.aiwa.bridge
 
 import java.net.HttpURLConnection
 import java.net.URI
-import java.util.concurrent.TimeoutException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-private const val POLL_INTERVAL_MS = 150L
-private const val POLL_TIMEOUT_MS = 5 * 60_000L
-
-/** Distinguishes "the backend rejected this because MY OWN earlier
- * request is still being processed" from a genuine failure — callers
- * should not treat this as an error to surface/retry from, since doing
- * so (see the bug this fixed in MainActivity) can undo the real
- * request's own in-flight state and invite a self-sustaining retry
- * storm while that original request is quietly still working. */
+/** The backend refused because a send is already running. Not a failure:
+ * callers must not undo the request really in flight. */
 class BusyException(message: String) : Exception(message)
 
-/** The backend answered 404: it is running an older version than this
- * app expects (reported live: the backend on the phone predated
- * /api/history, so history silently never loaded). Distinct from
- * "not reachable" so callers can say what to actually do. */
+/** The backend answered 404: it is older than this app expects. Distinct
+ * from "not reachable" so callers can say what to actually do. */
 class BackendOutdatedException(message: String) : Exception(message)
 
 class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") : ClaudeBridge {
 
-    // A raw ConnectException's own message ("Failed to connect to
-    // /127.0.0.1:8787") is Android/Java plumbing, not something that
-    // tells anyone what to actually do about it. This is far and away
-    // the single most common failure mode of this whole bridge (no
-    // server code here starts aiwa_server.py — see README's "Running
-    // this for real"), so it gets a real, actionable message instead of
-    // letting the raw exception surface as-is.
+    // A raw ConnectException's message is plumbing, not something that
+    // tells anyone what to do; not being able to reach the local backend
+    // is by far the most common failure, so it gets an actionable message.
     private fun <T> withClearConnectionError(block: () -> T): T = try {
         block()
     } catch (err: java.net.ConnectException) {
@@ -65,81 +47,8 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         connection.inputStream.bufferedReader().use { it.readText() }
     }
 
-    /**
-     * The backend's own /api/events is a real poll-and-clear queue, not
-     * a live stream — a single GET right after the POST returns only
-     * whatever happened to land in that instant, and real work runs in
-     * a background thread on the backend, so that GET always raced it.
-     * That's why this used to silently produce nothing. This polls
-     * repeatedly until a real "done" or "error" event arrives, bounded
-     * by POLL_TIMEOUT_MS so a hung `claude` process can never poll
-     * forever. Runs on Dispatchers.IO via flowOn below — every call
-     * here is blocking network I/O.
-     */
-    override fun sendMessage(text: String): Flow<String> = flow {
-        val acceptedRaw = postText("/api/message", text)
-        if (!acceptedRaw.contains("\"accepted\":true") && !acceptedRaw.contains("\"accepted\": true")) {
-            // Reported live and confirmed via server-side tracing: each
-            // claude invocation takes ~20-30s before its first token
-            // (proot/cold-start overhead) with nothing visible in the
-            // app meanwhile — an impatient extra tap during that wait
-            // correctly gets "busy" back (a real request IS in flight),
-            // but the caller needs to tell this apart from a genuine
-            // failure, or it ends up undoing the real request's own
-            // WORKING state (see MainActivity's BusyException handling).
-            if (acceptedRaw.contains("\"busy\"")) {
-                throw BusyException("a message from this app is already being processed")
-            }
-            throw IllegalStateException("message not accepted: $acceptedRaw")
-        }
-        // Reported live: the caller used to reset its own UI state to
-        // "working" BEFORE even calling this, unconditionally — so a
-        // busy-rejected attempt (exception thrown above) still wiped
-        // whatever the REAL in-flight request was showing, and once
-        // wiped, nothing put it back until that real request finished,
-        // producing a confusing "response is for the wrong message"
-        // lag. Emitting once here, only after the POST is confirmed
-        // accepted, gives the caller a real, safe trigger to reset its
-        // UI — an empty chunk is never emitted from the "text" branch
-        // below, so it can't be confused with real streamed content.
-        emit("")
-        val deadline = System.currentTimeMillis() + POLL_TIMEOUT_MS
-        while (true) {
-            if (System.currentTimeMillis() > deadline) {
-                throw TimeoutException("no response from Claude within ${POLL_TIMEOUT_MS}ms")
-            }
-            delay(POLL_INTERVAL_MS)
-            val events = JSONArray(getText("/api/events"))
-            for (i in 0 until events.length()) {
-                val event = events.getJSONObject(i)
-                when (event.optString("type")) {
-                    "text" -> {
-                        val chunk = event.optString("text")
-                        if (chunk.isNotEmpty()) emit(chunk)
-                    }
-                    "done" -> return@flow
-                    "error" -> throw RuntimeException(event.optString("message", "unknown Claude error"))
-                }
-            }
-        }
-    }.flowOn(Dispatchers.IO)
-
-    override suspend fun sendBackgroundInstruction(text: String) = withContext(Dispatchers.IO) {
-        postText("/api/background", text)
-        Unit
-    }
-
-    override suspend fun listSessions(): List<SessionInfo> = withContext(Dispatchers.IO) {
-        val array = JSONArray(getText("/api/sessions"))
-        (0 until array.length()).map {
-            val entry = array.getJSONObject(it)
-            SessionInfo(id = entry.getString("id"), preview = entry.optString("preview", entry.getString("id")))
-        }
-    }
-
-    // The backend answers {"accepted": false, ...} for a switch it
-    // refuses (a message is in flight, malformed value). Ignoring that
-    // used to make callers believe a switch happened when it hadn't.
+    // The backend answers {"accepted": false, ...} for a request it
+    // refuses; ignoring that made callers believe something had changed.
     private fun requireAccepted(raw: String) {
         if (raw.contains("\"accepted\": false") || raw.contains("\"accepted\":false")) {
             if (raw.contains("busy")) throw BusyException("backend busy: $raw")
@@ -147,23 +56,19 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         }
     }
 
-    override suspend fun selectSession(id: String?) = withContext(Dispatchers.IO) {
-        requireAccepted(postText("/api/session", id ?: ""))
-    }
-
-    override suspend fun selectModel(id: String?) = withContext(Dispatchers.IO) {
-        requireAccepted(postText("/api/model", id ?: ""))
-    }
-
     override suspend fun status(): BackendStatus = withContext(Dispatchers.IO) {
         val json = JSONObject(getText("/api/status"))
         BackendStatus(
-            session = if (json.isNull("session")) null else json.optString("session").ifEmpty { null },
             model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
             version = json.optInt("version", 0),
-            mode = json.optString("mode", "local"),
             cloudSession = if (json.isNull("cloud_session")) null else json.optString("cloud_session").ifEmpty { null },
         )
+    }
+
+    // The model passed to `claude --model` when a NEW cloud session is
+    // created; null = the CLI's own default.
+    override suspend fun selectModel(id: String?) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/model", id ?: ""))
     }
 
     override suspend fun listCloudSessions(): List<CloudSessionInfo> = withContext(Dispatchers.IO) {
@@ -184,6 +89,12 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         requireAccepted(postText("/api/cloud/select", target))
     }
 
+    // An EXISTING cloud session, given its link or id (the CLI can't list
+    // them); it becomes the current one.
+    override suspend fun addCloud(link: String) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/cloud/add", link))
+    }
+
     // Synchronous on the backend: creating a session can take a while
     // (the cloud machine starts). HONEST LIMIT (documented by Anthropic):
     // the CLI only queues the message — there is no way to read the reply
@@ -202,25 +113,5 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             if (error == "busy") throw BusyException("a cloud message is already being sent")
             CloudSendResult(ok = false, sessionId = null, url = null, error = error)
         }
-    }
-
-    override suspend fun currentSessionId(): String? = withContext(Dispatchers.IO) {
-        val status = JSONObject(getText("/api/status"))
-        if (status.isNull("session")) null else status.optString("session").ifEmpty { null }
-    }
-
-    /**
-     * Reported live: "ni dans le widget ni dans l'application il n'y a
-     * la récupération du contenu de la conversation" — resuming an
-     * existing session only ever showed NEW turns sent after switching
-     * to it; the actual past conversation was never loaded. This reads
-     * the real transcript straight off the session's own .jsonl file
-     * (see aiwa_server.py's read_session_transcript), same on-disk
-     * format list_sessions() already peeks at for a one-line preview.
-     */
-    override suspend fun fetchHistory(sessionId: String): String? = withContext(Dispatchers.IO) {
-        val encoded = java.net.URLEncoder.encode(sessionId, "UTF-8")
-        val response = JSONObject(getText("/api/history?session=$encoded"))
-        if (response.isNull("transcript")) null else response.optString("transcript").ifEmpty { null }
     }
 }

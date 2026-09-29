@@ -79,18 +79,17 @@ class SessionPickerActivity : ComponentActivity() {
             // Fresh list from the backend every time the picker opens.
             LaunchedEffect(Unit) { BackendSync.refresh(LocalClaudeBridge()) }
             val entries = buildList {
-                add(PickerEntry("+  Nouvelle session (téléphone)", !state.cloud && state.sessionId == null) { pick(null) })
-                add(PickerEntry("+  Nouvelle session cloud", state.cloud && state.cloudSessionId == null) { pickCloud("new") })
+                add(PickerEntry("+  Nouvelle session", state.cloudSessionId == null) { pickCloud("new") })
                 val openId = state.cloudSessionId
-                if (state.cloud && openId != null) {
+                if (openId != null) {
                     val url = state.cloudSessions.find { it.id == openId }?.url
                     add(PickerEntry("↗  Ouvrir dans l'appli Claude", false) { openInClaudeApp(openId, url) })
                 }
+                // The CLI can't list existing cloud sessions, so one made
+                // elsewhere is added by pasting its link.
+                add(PickerEntry("⎘  Ajouter une session (lien copié)", false) { addFromClipboard() })
                 state.cloudSessions.forEach { c ->
-                    add(PickerEntry("Cloud · " + c.title.take(60), state.cloud && c.id == state.cloudSessionId) { pickCloud(c.id) })
-                }
-                state.sessions.forEach { s ->
-                    add(PickerEntry(s.preview.take(70), !state.cloud && s.id == state.sessionId) { pick(s.id) })
+                    add(PickerEntry(c.title.take(60), c.id == state.cloudSessionId) { pickCloud(c.id) })
                 }
             }
             PickerSheet(entries) { finish() }
@@ -98,16 +97,24 @@ class SessionPickerActivity : ComponentActivity() {
     }
 
     // finish() first, work in a scope that outlives this activity.
-    private fun pick(sessionId: String?) {
-        val appContext = applicationContext
-        finish()
-        CoroutineScope(Dispatchers.Default).launch { switchSession(appContext, LocalClaudeBridge(), sessionId) }
-    }
-
     private fun pickCloud(target: String) {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchCloud(appContext, LocalClaudeBridge(), target) }
+    }
+
+    // Read here, on the main thread of the focused activity: that is the
+    // only place Android hands the clipboard over.
+    private fun addFromClipboard() {
+        val text = clipboardText(this)
+        if (text == null || !CLOUD_ID_IN_TEXT.containsMatchIn(text)) {
+            toastOnMain(this, "Aucun lien de session Claude dans le presse-papiers : copie l'adresse de la session (claude.ai/code/session_…).")
+            finish()
+            return
+        }
+        val appContext = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { addCloudSession(appContext, LocalClaudeBridge(), text) }
     }
 
     // Cloud replies are read in the Claude app (the CLI can't return them

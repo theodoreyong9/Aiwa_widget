@@ -193,30 +193,26 @@ sessionMenuExpanded=true
 }
 })
 DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=false}){
-// Both entries only ask the backend to switch and then re-read the
-// backend's real state (BackendSync) — never a local guess. The
-// history of a picked session is loaded by the effect above once
-// the session id actually changes.
-DropdownMenuItem(text={Text("Nouvelle session (téléphone)")},onClick={
-sessionMenuExpanded=false
-scope.launch{switchSession(context,bridge,null)}
-})
-// Cloud sessions: Aiwa only sends to them (a documented CLI limit),
-// the replies are read in the Claude app.
-DropdownMenuItem(text={Text("Nouvelle session cloud")},onClick={
+// Only asks the backend to switch, then re-reads the backend's real
+// state (BackendSync) — never a local guess. Cloud replies are read in
+// the Claude app: Aiwa only sends (a documented CLI limit).
+DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
 scope.launch{switchCloud(context,bridge,"new")}
 })
+DropdownMenuItem(text={Text("Ajouter une session (lien copié)")},onClick={
+sessionMenuExpanded=false
+val copied=clipboardText(context)
+if(copied==null||!CLOUD_ID_IN_TEXT.containsMatchIn(copied)){
+toastOnMain(context,"Aucun lien de session Claude dans le presse-papiers : copie l'adresse de la session (claude.ai/code/session_…).")
+}else{
+scope.launch{addCloudSession(context,bridge,copied)}
+}
+})
 for(c in state.cloudSessions){
-DropdownMenuItem(text={Text("Cloud · "+c.title)},onClick={
+DropdownMenuItem(text={Text(c.title)},onClick={
 sessionMenuExpanded=false
 scope.launch{switchCloud(context,bridge,c.id)}
-})
-}
-for(s in state.sessions){
-DropdownMenuItem(text={Text(s.preview)},onClick={
-sessionMenuExpanded=false
-scope.launch{switchSession(context,bridge,s.id)}
 })
 }
 }

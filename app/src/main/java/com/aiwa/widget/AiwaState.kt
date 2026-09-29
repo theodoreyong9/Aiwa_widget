@@ -1,13 +1,12 @@
 package com.aiwa.widget
 
 import com.aiwa.bridge.CloudSessionInfo
-import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 3
+const val EXPECTED_BACKEND_VERSION = 4
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -25,25 +24,17 @@ val MODEL_CHOICES = listOf(
 fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label ?: id ?: "Auto"
 
 data class AiwaState(
-    // Display name of the current session, derived by BackendSync from
-    // the backend's real answer — never guessed locally.
+    // Display name of the current cloud session, derived by BackendSync
+    // from the backend's real answer — never guessed locally.
     val session: String = "Nouvelle session",
-    // The real, full backend session id (`session` above is only a label).
-    val sessionId: String? = null,
-    val model: String? = null,
-    val sessions: List<SessionInfo> = emptyList(),
-    // Cloud mode: messages go to a Claude Code cloud session (readable in
-    // the Claude app) instead of the phone's own claude process.
-    val cloud: Boolean = false,
     val cloudSessionId: String? = null,
     val cloudSessions: List<CloudSessionInfo> = emptyList(),
+    val model: String? = null,
     val backendVersion: Int = 0,
     val status: Status = Status.READY,
-    // The conversation transcript, shown by both the app and the widget.
+    // What was sent, and where the answer is (cloud replies can't be read
+    // back by a program — see aiwa_server.py).
     val output: String = "",
-    // Which session `output` already holds the on-disk history of, so
-    // the history is loaded exactly once per session (see BackendSync).
-    val historyFor: String? = null,
     val question: String? = null,
 ) {
     enum class Status { READY, WORKING, WAITING, DONE, ERROR }
