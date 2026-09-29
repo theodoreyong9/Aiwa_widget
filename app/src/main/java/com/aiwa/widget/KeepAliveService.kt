@@ -36,7 +36,8 @@ private const val NOTIFICATION_ID = 1
  * state and redraws the widget when something the widget shows has changed
  * (Claude waiting for an answer, the site going live, the current session,
  * the backend going down or starting). It also restarts the backend, through
- * Termux, when it finds it down.
+ * Termux, when it finds it down, or older than this app expects. Every way
+ * Aiwa's process starts (wakeAiwa in AiwaApp.kt) starts this service.
  * Without it the widget only ever refreshed when it was tapped.
  */
 class KeepAliveService : Service() {
@@ -71,9 +72,19 @@ class KeepAliveService : Service() {
         val bridge = LocalClaudeBridge()
         var shown = widgetKey()
         var lastLaunch = 0L
+        var versionKicked = false
         while (true) {
             try {
                 BackendSync.refresh(bridge)
+                // An older server still answers after an app update (nothing opened
+                // the app to replace it): update and restart it, once.
+                val current = AiwaRepository.state.value
+                if (!versionKicked && current.backend == "up" && current.backendVersion in 1 until EXPECTED_BACKEND_VERSION) {
+                    versionKicked = true
+                    lastLaunch = System.currentTimeMillis()
+                    startAiwaBackendViaTermux(applicationContext, forceRestart = true)
+                    AiwaRepository.markBackendStarting()
+                }
                 // Down: bring it back on its own (at most every 90 s), so it is
                 // usually up already when you tap — a cold start takes a while.
                 if (AiwaRepository.state.value.backend == "down" && System.currentTimeMillis() - lastLaunch > 90_000) {

@@ -85,6 +85,7 @@ private fun PickerSheet(entries: List<PickerEntry>, onDismiss: () -> Unit) {
 class SessionPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
         setContent {
             val state by AiwaRepository.state.collectAsState()
             // Fresh list from the backend every time the picker opens (which
@@ -136,6 +137,7 @@ class SessionPickerActivity : ComponentActivity() {
 class ModelPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
         setContent {
             val state by AiwaRepository.state.collectAsState()
             LaunchedEffect(Unit) {
@@ -177,6 +179,7 @@ class ModelPickerActivity : ComponentActivity() {
 class RepoPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
         setContent {
             val state by AiwaRepository.state.collectAsState()
             var repos by remember { mutableStateOf<List<RepoInfo>?>(null) }

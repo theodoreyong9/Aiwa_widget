@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 class OpenResultActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
         if (!openResult(this)) toastOnMain(this, "Rien à ouvrir pour l'instant.")
         finish()
     }

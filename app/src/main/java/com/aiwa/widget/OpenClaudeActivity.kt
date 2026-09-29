@@ -17,6 +17,7 @@ import kotlinx.coroutines.withContext
 class OpenClaudeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
         if (openClaudeApp(this)) {
             finish()
             return
