@@ -382,11 +382,14 @@ def _instruction_lines(repo, work, base, direct):
             ))
         lines.append((
             "verify",
-            "Vérification : avant de dire que c'est fini, contrôle ton travail toi-même. Lance les tests, le lint et le build s'il y en a. "
-            "Après un push, regarde le résultat des GitHub Actions et lis leurs logs (jobs en échec compris) avec les outils dont tu disposes, et corrige avant de conclure. "
-            "Si le projet a une interface (page web, site), contrôle l'UX avec Playwright — Chromium est déjà installé dans ta session, ne lance pas `playwright install` : "
-            "ouvre la page (en local, puis à l'adresse publiée après un déploiement) en mobile (~390 px) puis en bureau, fais des captures, et vérifie qu'il n'y a ni erreur dans la console, "
-            "ni requête cassée, ni débordement, et que les parcours principaux fonctionnent. Dis-moi ce que tu as vérifié et ce qui reste douteux.",
+            "Vérification : avant de dire que c'est fini, contrôle ton travail toi-même et lis TOUS les logs auxquels tu as accès, pas seulement ceux des GitHub Actions : "
+            "la sortie des tests, du lint et du build ; les logs du serveur ou du script que tu lances ; après un push, les logs des GitHub Actions et des déploiements (jobs en échec compris) ; "
+            "la console du navigateur (erreurs, avertissements, exceptions non gérées), les requêtes réseau en échec ou en erreur HTTP et les erreurs de page, que tu récupères avec Playwright "
+            "(page.on('console'), page.on('pageerror'), page.on('requestfailed'), réponses avec un statut >= 400) — Chromium est déjà installé dans ta session, ne lance pas `playwright install` ; "
+            "et tout autre journal disponible dans ton environnement. Ne te contente pas de « ça démarre » : cherche les erreurs et les avertissements, et corrige-les avant de conclure. "
+            "Si le projet a une interface, contrôle aussi l'UX avec Playwright : en local puis, après un déploiement, à l'adresse publiée ; en mobile (~390 px) puis en bureau ; avec des captures ; "
+            "sans débordement ni élément cassé, et les parcours principaux fonctionnels. "
+            "Dis-moi ce que tu as lu et vérifié, ce que tu n'as pas pu consulter (logs inaccessibles) et ce qui reste douteux.",
         ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
