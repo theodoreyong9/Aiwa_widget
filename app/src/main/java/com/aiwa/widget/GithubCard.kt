@@ -117,10 +117,11 @@ fun GithubCard(state: AiwaState) {
                     Switch(checked = state.pushMain, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, pushMain = next) } })
                 }
                 Text(
-                    "Dans les deux cas Claude pousse : la différence, c'est où. Activé (« Push: main ») : directement sur la branche principale, " +
-                        "sans pull request. Désactivé (« Push: branche ») : sur une branche à part (aiwa/date), la principale n'est pas touchée. " +
-                        "Quand tu repasses en direct, Claude doit d'abord rapatrier sur la principale ce qui est resté sur la branche de travail : " +
-                        "au final tout est sur la principale. S'applique dès ton prochain message, même dans la session en cours.",
+                    "Claude travaille toujours sur sa propre branche. « Push: main » : à chaque changement terminé il intègre toute sa branche dans la " +
+                        "branche principale et la pousse (push direct, sinon pull request fusionnée aussitôt), après avoir vérifié qu'aucune modification " +
+                        "parallèle n'entre en conflit ; s'il y en a une, ou au moindre doute, il n'intègre rien et te pose la question. " +
+                        "« Push: branche » : il ne pousse que sa branche, la principale n'est pas touchée, et tout sera intégré au prochain passage en « main ». " +
+                        "Il ne force jamais un push. S'applique dès ton prochain message, même dans la session en cours.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -133,6 +134,17 @@ fun GithubCard(state: AiwaState) {
                         "il te dit le réglage à faire. Le bouton « Site ↗ » apparaît quand l'adresse publique répond.",
                     style = MaterialTheme.typography.bodySmall,
                 )
+                // The state of the GitHub Actions (public data), and the run itself.
+                val repoName = state.repo
+                val runText = when (state.ciState) {
+                    "success" -> "Dernière exécution des Actions : réussie."
+                    "failure" -> "Dernière exécution des Actions : échec."
+                    "running" -> "Une exécution des Actions est en cours."
+                    "none" -> "Aucune exécution des Actions pour l'instant."
+                    else -> "État des Actions inconnu (dépôt privé ?) : le lien ouvre la page."
+                }
+                Text(runText, style = MaterialTheme.typography.bodySmall)
+                Button(onClick = { openUrl(context, state.ciUrl ?: "https://github.com/$repoName/actions") }) { Text("Voir les Actions sur GitHub ↗") }
                 // The address is known as soon as a repository is chosen.
                 val url = state.siteUrl
                 if (url != null) {

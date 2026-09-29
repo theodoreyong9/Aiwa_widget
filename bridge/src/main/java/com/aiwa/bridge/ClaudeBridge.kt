@@ -4,6 +4,9 @@ package com.aiwa.bridge
 // answer yet) or live.
 data class SiteInfo(val url: String?, val state: String)
 
+// state: running, success, failure or none.
+data class CiInfo(val state: String, val url: String?)
+
 data class BackendStatus(
     val model: String?,
     // low / medium / high / xhigh / max, null = automatic.
@@ -22,6 +25,7 @@ data class BackendStatus(
     val waiting: Boolean = false,
     val alertLast: Long? = null,
     val site: SiteInfo = SiteInfo(null, "off"),
+    val ci: CiInfo? = null,
     val githubError: String? = null,
 )
 

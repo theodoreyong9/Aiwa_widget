@@ -63,6 +63,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     override suspend fun status(): BackendStatus = withContext(Dispatchers.IO) {
         val json = JSONObject(getText("/api/status"))
         val site = json.optJSONObject("site")
+        val run = json.optJSONObject("ci")
         BackendStatus(
             model = json.str("model"),
             effort = json.str("effort"),
@@ -76,6 +77,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             waiting = json.optBoolean("waiting", false),
             alertLast = if (json.isNull("alert_last")) null else json.optLong("alert_last"),
             site = SiteInfo(site?.str("url"), site?.str("state") ?: "off"),
+            ci = run?.let { CiInfo(it.str("state") ?: "none", it.str("url")) },
             githubError = json.str("github_error"),
         )
     }

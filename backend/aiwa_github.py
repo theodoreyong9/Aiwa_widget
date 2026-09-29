@@ -113,6 +113,33 @@ def owner_repos(owner):
     return repos
 
 
+def latest_run(repo):
+    """The most recent GitHub Actions run of a repository: {"state":
+    "running" | "success" | "failure" | "none", "url"} — a plain
+    unauthenticated request (public repositories), None when it can't be
+    told (private, rate-limited...)."""
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/actions/runs?per_page=1",
+            headers={"User-Agent": "aiwa", "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as reply:
+            data = json.load(reply)
+    except (OSError, ValueError):
+        return None
+    runs = data.get("workflow_runs") or []
+    if not runs:
+        return {"state": "none", "url": None}
+    run = runs[0]
+    if run.get("status") != "completed":
+        state = "running"
+    elif run.get("conclusion") == "success":
+        state = "success"
+    else:
+        state = "failure"
+    return {"state": state, "url": run.get("html_url")}
+
+
 def checkout_owner():
     """Whose repositories to offer first: the owner of the checkout Aiwa was
     installed from (its `origin` remote), or AIWA_GITHUB_OWNER."""
@@ -273,13 +300,14 @@ def default_branch(repo):
     return "main"
 
 
-def prepare_repo_dir(repo, direct):
+def prepare_repo_dir(repo):
     """The local directory `claude --cloud` is started from: the cloud
     session clones the GitHub remote of this directory at its current
     branch (Anthropic's documented behaviour), with Claude's own access.
-    Returns (directory, branch Claude should push to, default branch): the
-    default branch itself, or with direct=False a fresh aiwa/<date> branch
-    Claude is asked to create itself."""
+    Returns (directory, work branch, default branch): the work branch is
+    the session's own branch, a fresh aiwa/<date> that Claude is asked to
+    create from the default branch; the local directory stays on the
+    default branch."""
     url = f"{GITHUB_BASE}/{repo}.git"
     branch = default_branch(repo)
     dest = REPOS_DIR / repo.replace("/", "__")
@@ -302,6 +330,4 @@ def prepare_repo_dir(repo, direct):
             _git(["init", "-q", "-b", branch], cwd=dest)
             _git(["remote", "add", "origin", url], cwd=dest)
             _git(["-c", "user.name=aiwa", "-c", "user.email=aiwa@example.com", "commit", "-q", "--allow-empty", "-m", "stub"], cwd=dest)
-    if direct:
-        return dest, branch, branch
     return dest, "aiwa/" + time.strftime("%Y%m%d-%H%M%S"), branch

@@ -49,6 +49,8 @@ object BackendSync {
                     effort = status.effort,
                     siteUrl = status.site.url,
                     siteState = status.site.state,
+                    ciState = status.ci?.state,
+                    ciUrl = status.ci?.url,
                     githubError = status.githubError,
                 )
             }

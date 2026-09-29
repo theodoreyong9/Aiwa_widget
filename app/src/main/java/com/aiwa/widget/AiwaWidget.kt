@@ -79,6 +79,8 @@ private fun Content(state: AiwaState) {
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
     // Room for a second row (two rows of buttons plus the padding).
     val tall = LocalSize.current.height >= 96.dp
+    // Room for one more pill on the GitHub row (the link to the Actions).
+    val wide = LocalSize.current.width >= 400.dp
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(rgb(android.graphics.Color.rgb(22, 22, 28)))
@@ -209,6 +211,27 @@ private fun Content(state: AiwaState) {
                             .cornerRadius(20.dp)
                             .padding(horizontal = 11.dp, vertical = 11.dp)
                             .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),
+                    )
+                }
+                // The state of the GitHub Actions, one tap from the run itself
+                // (a wide widget only; the app card always has it).
+                if (wide && (state.autodeploy || state.ciState != null)) {
+                    Spacer(GlanceModifier.width(6.dp))
+                    val mark = when (state.ciState) {
+                        "success" -> "✓"
+                        "failure" -> "✗"
+                        "running" -> "…"
+                        else -> ""
+                    }
+                    Text(
+                        text = "Actions $mark ↗".replace("  ", " "),
+                        style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                        maxLines = 1,
+                        modifier = GlanceModifier
+                            .background(when (state.ciState) { "success" -> green; "failure" -> alertRed; else -> pill })
+                            .cornerRadius(20.dp)
+                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(state.ciUrl ?: "https://github.com/${state.repo}/actions")))),
                     )
                 }
             }

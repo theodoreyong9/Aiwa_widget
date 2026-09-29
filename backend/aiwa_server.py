@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 10
+BACKEND_VERSION = 11
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -105,6 +105,7 @@ github_error = None  # the last GitHub problem worth showing in the app
 # Whether the Pages address of current_repo answers, probed in the background.
 site_lock = threading.Lock()
 site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
+ci_cache = {"repo": None, "info": None, "at": 0.0, "busy": False}
 REPOS_STORE = Path.home() / ".aiwa_repos.json"
 store_lock = threading.Lock()
 # Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
@@ -271,7 +272,7 @@ def _load_cloud_sessions():
     return data if isinstance(data, list) else []
 
 
-def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None, model=None, effort=None, home=None):
+def _save_cloud_session(session_id, title, url, repo=None, work=None, base=None, direct=None, instr=None, model=None, effort=None):
     """The CLI has no non-interactive way to LIST cloud sessions, so the
     ones Aiwa created or was given a link to are remembered here, with the
     repository (and branch) a session was started on and a fingerprint of
@@ -280,8 +281,9 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
         entries = _load_cloud_sessions()
         existing = next((e for e in entries if e.get("id") == session_id), None) or {}
         entries = [e for e in entries if e.get("id") != session_id]
-        # Everything already known is kept (work branch, what to merge back,
-        # ...), whatever this call is about; only what is given changes.
+        # Everything already known is kept, whatever this call is about;
+        # only what is given changes. work: the session's own branch; base:
+        # the repository's default branch; direct: integrate into base.
         entry = dict(existing)
         entry.update({
             "id": session_id,
@@ -289,7 +291,7 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
             "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
         })
         # model / effort: "" = automatic, absent = unknown.
-        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort), ("home", home)):
+        for key, value in (("repo", repo), ("work", work), ("base", base), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort)):
             if value is not None:
                 entry[key] = value
         entries.insert(0, entry)
@@ -336,7 +338,7 @@ def _known_repos():
 _INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "alert": "alerte", "extra": "consigne perso"}
 
 
-def _instruction_lines(repo, branch, direct, merge_from=None):
+def _instruction_lines(repo, work, base, direct):
     """What the user's switches ask of Claude Code, in words, as (key, text)
     pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
@@ -345,19 +347,21 @@ def _instruction_lines(repo, branch, direct, merge_from=None):
     if repo:
         lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
         if direct:
-            text = f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request)."
-            if merge_from:
-                # Coming back from a work branch: nothing done there may be left behind.
-                text += (
-                    f" Avant cela, rapatrie sur {branch} tout ce qui a été fait sur la branche de travail {merge_from} "
-                    f"(merge ou fast-forward, sans perdre aucun commit), puis pousse : au final tout doit être sur {branch}."
-                )
-            lines.append(("push", text))
+            lines.append((
+                "push",
+                f"Push : travaille sur ta propre branche ({work}) : commits-y et pousse-la. Quand un changement est terminé, intègre TOUTE ta branche "
+                f"dans {base} (y compris les commits faits quand l'intégration était désactivée) et pousse {base}, sans pull request à relire : "
+                "par push direct si ta session le permet, sinon en ouvrant une pull request que tu fusionnes aussitôt. "
+                f"Avant d'intégrer : récupère {base} et vérifie qu'il n'a pas reçu de modification parallèle qui entre en conflit avec les tiennes. "
+                "S'il y a un conflit, ou le moindre doute, n'intègre rien : explique-moi le problème et pose-moi la question. "
+                "Jamais de force-push, jamais d'écrasement du travail de quelqu'un d'autre.",
+            ))
         else:
             lines.append((
                 "push",
-                f"Push : travaille sur la branche {branch} (si elle existe déjà, reprends-la après l'avoir mise à jour avec la branche principale ; "
-                "sinon crée-la depuis la branche par défaut), commit et push dessus, sans toucher à la branche principale.",
+                f"Push : travaille sur ta propre branche ({work}) (crée-la depuis {base} si elle n'existe pas) : commits-y et pousse-la. "
+                f"N'intègre rien dans {base} et ne pousse pas dessus : tes changements s'accumulent sur ta branche et seront intégrés en entier "
+                "au prochain passage en intégration directe.",
             ))
         if deploy:
             lines.append((
@@ -380,13 +384,13 @@ def _instruction_lines(repo, branch, direct, merge_from=None):
     return lines
 
 
-def _compose(entry, repo, branch, direct):
+def _compose(entry, repo, work, base, direct):
     """The instructions added to a message, and what was told (a hash per
     instruction, kept with the session). Everything goes with a session's
     FIRST message; after that only what changed since — a new or altered
     instruction, or a note that one was withdrawn — and nothing at all when
     nothing changed, so the conversation isn't buried in repeats."""
-    lines = _instruction_lines(repo, branch, direct, (entry or {}).get("merge_from"))
+    lines = _instruction_lines(repo, work, base, direct)
     told = {key: hashlib.sha1(text.encode()).hexdigest()[:8] for key, text in lines}
     previous = (entry or {}).get("instr")
     if not isinstance(previous, dict) or not previous:
@@ -403,8 +407,7 @@ def _preview():
     with lock:
         repo, direct, session = current_repo, push_main, current_cloud
     entry = _session_entry(session) if session else {}
-    branch = entry.get("branch") or "main"
-    text, _ = _compose({}, repo, branch, direct)
+    text, _ = _compose({}, repo, entry.get("work") or "aiwa/<date>", entry.get("base") or "main", direct)
     return text.strip()
 
 
@@ -419,25 +422,16 @@ def _last_json_object(output):
     return None
 
 
-def _retarget_session(session_id, direct):
-    """Push switched while a repository session is open. From its next
-    message Claude is told the new target:
-     - work branch: the session's ONE work branch (created the first time,
-       reused afterwards, so switching back and forth doesn't scatter work
-       over many branches);
-     - direct: the session's home branch — and, when it comes from a work
-       branch, to bring everything done there back onto it first. Either
-       way every commit ends up pushed; what differs is where, meanwhile."""
-    entry = _session_entry(session_id)
-    repo = entry.get("repo")
-    if not repo:
-        return
-    if direct:
-        came_from = entry.get("branch") if entry.get("direct") is False else None
-        _update_session(session_id, direct=True, branch=entry.get("home") or github.default_branch(repo), merge_from=came_from)
-    else:
-        work = entry.get("work") or "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
-        _update_session(session_id, direct=False, branch=work, work=work, merge_from=None)
+def _session_targets(session_id, entry):
+    """(work, base) of a repository session. Sessions remembered by older
+    versions get them filled in, once."""
+    work, base = entry.get("work"), entry.get("base")
+    if not work or not base:
+        legacy = entry.get("branch")
+        base = base or entry.get("home") or (legacy if entry.get("direct") else None) or "main"
+        work = work or (legacy if entry.get("direct") is False and legacy else None) or "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
+        _update_session(session_id, work=work, base=base)
+    return work, base
 
 
 def _branch_candidates():
@@ -490,7 +484,11 @@ def cloud_add(text):
         title = branch
     url_match = CLOUD_URL_RE.search(text)
     # An imported session works on its own branch: that is the only one Claude can push to.
-    _save_cloud_session(session_id, title, url_match.group(0) if url_match else None, repo=repo, branch=branch, direct=True if branch else None, home=branch)
+    # An imported session keeps its own branch as its work branch.
+    _save_cloud_session(
+        session_id, title, url_match.group(0) if url_match else None,
+        repo=repo, work=branch, base=github.default_branch(repo) if branch else None, direct=True if branch else None,
+    )
     with lock:
         current_cloud = last_cloud = session_id
         current_repo = _session_entry(session_id).get("repo")
@@ -554,7 +552,11 @@ def cloud_send(text, command=False):
             sent, fingerprint = text, None
             if not command:
                 entry = _session_entry(session_id)
-                extra_text, fingerprint = _compose(entry, entry.get("repo"), entry.get("branch") or "main", entry.get("direct", True))
+                work = base = None
+                if entry.get("repo"):
+                    work, base = _session_targets(session_id, entry)
+                    entry = _session_entry(session_id)
+                extra_text, fingerprint = _compose(entry, entry.get("repo"), work, base, entry.get("direct", True))
                 sent += extra_text
             result = _queue_followup(session_id, sent)
             if not result["ok"]:
@@ -562,20 +564,20 @@ def cloud_send(text, command=False):
             if not command:
                 _save_cloud_session(session_id, title, result["url"], instr=fingerprint)
             return {"ok": True, "session_id": session_id, "url": result["url"]}
-        directory, branch, base = CLOUD_DIR, None, None
+        directory, work, base = CLOUD_DIR, None, None
         if repo:
             # The session starts on the chosen repository: the cloud clones
             # the GitHub remote of this directory itself, with Claude's own
             # access (the user grants it at claude.ai/connect-github).
             try:
-                directory, branch, base = github.prepare_repo_dir(repo, direct_now)
+                directory, work, base = github.prepare_repo_dir(repo)
             except github.GithubError as err:
                 github_error = f"dépôt {repo} : {err}"
                 return {"ok": False, "error": github_error}
             github_error = None
         else:
             _ensure_cloud_repo()
-        extra_text, fingerprint = _compose({}, repo, branch, direct_now)
+        extra_text, fingerprint = _compose({}, repo, work, base, direct_now)
         task = text + extra_text
         if task.lstrip().startswith("-"):
             task = "Message : " + task
@@ -611,9 +613,7 @@ def cloud_send(text, command=False):
         with lock:
             current_cloud = last_cloud = found
             _save_state()
-        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "", home=base)
-        if repo and not direct_now:
-            _update_session(found, work=branch)
+        _save_cloud_session(found, title, url, repo=repo, work=work, base=base, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "")
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -649,6 +649,30 @@ def _site_snapshot():
             site_cache["busy"] = True
             threading.Thread(target=_site_probe, args=(url,), daemon=True).start()
     return {"url": url, "state": state}
+
+
+def _ci_probe(repo):
+    info = github.latest_run(repo)
+    with site_lock:
+        # A failed lookup (rate limit, private repository) keeps what was known.
+        ci_cache.update(repo=repo, info=info if info is not None else (ci_cache["info"] if ci_cache["repo"] == repo else None), at=time.time(), busy=False)
+
+
+def _ci_snapshot():
+    """The latest GitHub Actions run of the current repository ({"state",
+    "url"}, or None when unknown). Public data, looked up at most every
+    150 s — the unauthenticated API allows only 60 requests an hour."""
+    with lock:
+        repo = current_repo
+    if not repo:
+        return None
+    with site_lock:
+        fresh = ci_cache["repo"] == repo
+        info = ci_cache["info"] if fresh else None
+        if (not fresh or time.time() - ci_cache["at"] > 150) and not ci_cache["busy"]:
+            ci_cache["busy"] = True
+            threading.Thread(target=_ci_probe, args=(repo,), daemon=True).start()
+    return info
 
 
 def _repo_choices():
@@ -744,7 +768,7 @@ class Handler(BaseHTTPRequestHandler):
                 "last_session": last_cloud,
                 "repo": repo, "push_main": direct, "autodeploy": deploy, "extra": own,
                 "waiting": is_waiting, "alert_last": last_ping,
-                "site": _site_snapshot(), "github_error": problem,
+                "site": _site_snapshot(), "ci": _ci_snapshot(), "github_error": problem,
             })
         elif self.path == "/api/cloud/sessions":
             self.reply_json(_load_cloud_sessions())
@@ -870,7 +894,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if isinstance(options.get("push_main"), bool):
                     if options["push_main"] != push_main and current_cloud:
-                        retarget = (current_cloud, options["push_main"])
+                        retarget = current_cloud
                     push_main = options["push_main"]
                 if isinstance(options.get("autodeploy"), bool):
                     autodeploy = options["autodeploy"]
@@ -879,7 +903,7 @@ class Handler(BaseHTTPRequestHandler):
                 _save_state()
             if retarget:
                 # The session in progress follows the switch from its next message.
-                threading.Thread(target=_retarget_session, args=retarget, daemon=True).start()
+                _update_session(retarget, direct=push_main)
             self.reply_json({"accepted": True})
         else:
             self.send_error(404)
