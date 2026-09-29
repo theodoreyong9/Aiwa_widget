@@ -77,7 +77,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             waiting = json.optBoolean("waiting", false),
             alertLast = if (json.isNull("alert_last")) null else json.optLong("alert_last"),
             site = SiteInfo(site?.str("url"), site?.str("state") ?: "off"),
-            ci = run?.let { CiInfo(it.str("state") ?: "none", it.str("url")) },
+            ci = run?.let { CiInfo(it.str("state") ?: "none", it.str("url"), it.optBoolean("fresh", false)) },
             githubError = json.str("github_error"),
         )
     }
@@ -177,6 +177,10 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         if (autodeploy != null) body.put("autodeploy", autodeploy)
         if (extra != null) body.put("extra", extra)
         requireAccepted(postText("/api/options", body.toString()))
+    }
+
+    override suspend fun ciSeen() = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/ci/seen", ""))
     }
 
     override suspend fun waitingClear() = withContext(Dispatchers.IO) {

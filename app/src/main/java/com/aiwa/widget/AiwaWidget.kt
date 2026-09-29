@@ -200,7 +200,20 @@ private fun Content(state: AiwaState) {
                 // answers. Orange = it answers; grey = not (yet) — it still opens.
                 val site = state.siteUrl
                 val live = state.siteState == "live"
-                if (site != null && (state.autodeploy || live)) {
+                if (state.ciFresh) {
+                    // A new green run the user hasn't seen: something to go and look at.
+                    Spacer(GlanceModifier.width(6.dp))
+                    Text(
+                        text = "● Prêt à voir ↗",
+                        style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold),
+                        maxLines = 1,
+                        modifier = GlanceModifier
+                            .background(green)
+                            .cornerRadius(20.dp)
+                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .clickable(actionStartActivity<OpenResultActivity>()),
+                    )
+                } else if (site != null && (state.autodeploy || live)) {
                     Spacer(GlanceModifier.width(6.dp))
                     Text(
                         text = if (live) "Site ↗" else "Site … ↗",

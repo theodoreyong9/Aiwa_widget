@@ -198,6 +198,29 @@ suspend fun addRepoFromText(context: Context, bridge: ClaudeBridge, text: String
     AiwaWidget().updateAll(context)
 }
 
+/**
+ * "Ready to see": opens the result of the work — the site when its address
+ * answers, otherwise the latest Actions run (or the Actions page) — and,
+ * when that was news (a new green run), tells the backend the user went to look.
+ */
+fun openResult(context: Context): Boolean {
+    val state = AiwaRepository.state.value
+    val repo = state.repo ?: return false
+    val site = state.siteUrl
+    val target = if (state.siteState == "live" && site != null) site else state.ciUrl ?: "https://github.com/$repo/actions"
+    val opened = openUrl(context, target)
+    if (opened && state.ciFresh) {
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            val bridge = LocalClaudeBridge()
+            try { bridge.ciSeen() } catch (err: Exception) { }
+            BackendSync.refresh(bridge)
+            AiwaWidget().updateAll(appContext)
+        }
+    }
+    return opened
+}
+
 /** Puts text on the clipboard. */
 fun copyToClipboard(context: Context, text: String) {
     val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return

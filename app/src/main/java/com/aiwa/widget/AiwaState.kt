@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 11
+const val EXPECTED_BACKEND_VERSION = 12
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -79,6 +79,8 @@ data class AiwaState(
     // failure / none, with the link to that run (null = unknown).
     val ciState: String? = null,
     val ciUrl: String? = null,
+    // A new green run the user has not been told about: there is something to look at.
+    val ciFresh: Boolean = false,
     val githubError: String? = null,
     val status: Status = Status.READY,
     // The last problem worth telling the user about, shown in the app only

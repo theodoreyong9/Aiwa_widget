@@ -118,7 +118,7 @@ fun GithubCard(state: AiwaState) {
                 }
                 Text(
                     "Claude travaille toujours sur sa propre branche. « Push: main » : à chaque changement terminé il intègre toute sa branche dans la " +
-                        "branche principale et la pousse (push direct, sinon pull request fusionnée aussitôt), après avoir vérifié qu'aucune modification " +
+                        "branche principale (celle que GitHub Pages déploie, sauf Pages configuré sur sa branche) et la pousse (push direct, sinon pull request fusionnée aussitôt), après avoir vérifié qu'aucune modification " +
                         "parallèle n'entre en conflit ; s'il y en a une, ou au moindre doute, il n'intègre rien et te pose la question. " +
                         "« Push: branche » : il ne pousse que sa branche, la principale n'est pas touchée, et tout sera intégré au prochain passage en « main ». " +
                         "Il ne force jamais un push. S'applique dès ton prochain message, même dans la session en cours.",
@@ -127,6 +127,13 @@ fun GithubCard(state: AiwaState) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Déployer avec GitHub Pages", Modifier.weight(1f))
                     Switch(checked = state.autodeploy, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, autodeploy = next) } })
+                }
+                if (state.autodeploy && !state.pushMain) {
+                    Text(
+                        "Attention : le déploiement ne se déclenche que par un push sur la branche principale. En « Push: branche », rien ne sera publié.",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 Text(
                     "Aiwa ne déploie rien lui-même : cette option ajoute à ton prochain message une consigne demandant à Claude de publier le site " +
@@ -142,6 +149,10 @@ fun GithubCard(state: AiwaState) {
                     "running" -> "Une exécution des Actions est en cours."
                     "none" -> "Aucune exécution des Actions pour l'instant."
                     else -> "État des Actions inconnu (dépôt privé ?) : le lien ouvre la page."
+                }
+                if (state.ciFresh) {
+                    Text("● Une exécution des Actions vient de réussir : tu peux aller voir le résultat.", color = MaterialTheme.colorScheme.primary)
+                    Button(onClick = { openResult(context) }) { Text("Voir le résultat ↗") }
                 }
                 Text(runText, style = MaterialTheme.typography.bodySmall)
                 Button(onClick = { openUrl(context, state.ciUrl ?: "https://github.com/$repoName/actions") }) { Text("Voir les Actions sur GitHub ↗") }

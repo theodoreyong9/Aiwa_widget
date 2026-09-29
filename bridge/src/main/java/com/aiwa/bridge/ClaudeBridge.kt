@@ -5,7 +5,8 @@ package com.aiwa.bridge
 data class SiteInfo(val url: String?, val state: String)
 
 // state: running, success, failure or none.
-data class CiInfo(val state: String, val url: String?)
+// fresh: a new green run the user has not been told about yet.
+data class CiInfo(val state: String, val url: String?, val fresh: Boolean = false)
 
 data class BackendStatus(
     val model: String?,
@@ -49,6 +50,9 @@ interface ClaudeBridge {
     // The instructions integrated into the conversation. Only the ones that
     // are not null are changed.
     suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, extra: String?)
+
+    // The user went to look at the latest Actions run: it is no longer news.
+    suspend fun ciSeen()
 
     // The user opened the session (or answered): the waiting indicator goes off.
     suspend fun waitingClear()

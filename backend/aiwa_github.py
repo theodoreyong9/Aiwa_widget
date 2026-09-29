@@ -137,7 +137,7 @@ def latest_run(repo):
         state = "success"
     else:
         state = "failure"
-    return {"state": state, "url": run.get("html_url")}
+    return {"state": state, "url": run.get("html_url"), "id": run.get("id")}
 
 
 def checkout_owner():

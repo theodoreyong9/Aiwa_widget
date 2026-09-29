@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 11
+BACKEND_VERSION = 12
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -106,6 +106,9 @@ github_error = None  # the last GitHub problem worth showing in the app
 site_lock = threading.Lock()
 site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
 ci_cache = {"repo": None, "info": None, "at": 0.0, "busy": False}
+# repo -> id of the last Actions run the user was told about (persisted): a
+# green run with another id is news — "you can go and look".
+ci_seen = {}
 REPOS_STORE = Path.home() / ".aiwa_repos.json"
 store_lock = threading.Lock()
 # Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
@@ -134,6 +137,10 @@ def _load_state():
     extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
     effort = data.get("effort")
     current_effort = effort if effort in EFFORT_LEVELS else None
+    seen = data.get("ci_seen")
+    ci_seen.clear()
+    if isinstance(seen, dict):
+        ci_seen.update({k: v for k, v in seen.items() if isinstance(k, str) and isinstance(v, int)})
     topic = data.get("topic")
     valid = isinstance(topic, str) and re.fullmatch(r"aiwa-[a-f0-9]{24}", topic)
     waiting_topic = topic if valid else "aiwa-" + secrets.token_hex(12)
@@ -149,7 +156,7 @@ def _save_state():
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
             "push_main": push_main, "autodeploy": autodeploy, "extra": extra,
-            "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud,
+            "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud, "ci_seen": ci_seen,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -335,7 +342,7 @@ def _known_repos():
     return [r for r in known if isinstance(r, str) and github.REPO_RE.fullmatch(r)]
 
 
-_INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "alert": "alerte", "extra": "consigne perso"}
+_INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "verify": "vérification", "alert": "alerte", "extra": "consigne perso"}
 
 
 def _instruction_lines(repo, work, base, direct):
@@ -352,6 +359,8 @@ def _instruction_lines(repo, work, base, direct):
                 f"Push : travaille sur ta propre branche ({work}) : commits-y et pousse-la. Quand un changement est terminé, intègre TOUTE ta branche "
                 f"dans {base} (y compris les commits faits quand l'intégration était désactivée) et pousse {base}, sans pull request à relire : "
                 "par push direct si ta session le permet, sinon en ouvrant une pull request que tu fusionnes aussitôt. "
+                f"Le push se fait dans {base}, qui est la branche que GitHub Pages déploie ; seule exception : si le déploiement Pages de ce dépôt "
+                "est configuré pour publier depuis ta propre branche (regarde le workflow Pages et ses déclencheurs), pousse alors sur cette branche-là. "
                 f"Avant d'intégrer : récupère {base} et vérifie qu'il n'a pas reçu de modification parallèle qui entre en conflit avec les tiennes. "
                 "S'il y a un conflit, ou le moindre doute, n'intègre rien : explique-moi le problème et pose-moi la question. "
                 "Jamais de force-push, jamais d'écrasement du travail de quelqu'un d'autre.",
@@ -368,8 +377,17 @@ def _instruction_lines(repo, work, base, direct):
                 "deploy",
                 f"Déploiement : le site est publié par GitHub Pages via GitHub Actions, à l'adresse {github.pages_url(repo)}. "
                 "S'il n'y a pas encore de workflow Pages (actions/configure-pages, upload-pages-artifact, deploy-pages, déclenché à chaque push sur la branche principale), ajoute-le ; pas de branche gh-pages. "
+                f"Le déploiement ne se déclenche que par un push sur {base} : tant que ton travail n'y est pas intégré, rien n'est publié. "
                 "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi.",
             ))
+        lines.append((
+            "verify",
+            "Vérification : avant de dire que c'est fini, contrôle ton travail toi-même. Lance les tests, le lint et le build s'il y en a. "
+            "Après un push, regarde le résultat des GitHub Actions et lis leurs logs (jobs en échec compris) avec les outils dont tu disposes, et corrige avant de conclure. "
+            "Si le projet a une interface (page web, site), contrôle l'UX avec Playwright — Chromium est déjà installé dans ta session, ne lance pas `playwright install` : "
+            "ouvre la page (en local, puis à l'adresse publiée après un déploiement) en mobile (~390 px) puis en bureau, fais des captures, et vérifie qu'il n'y a ni erreur dans la console, "
+            "ni requête cassée, ni débordement, et que les parcours principaux fonctionnent. Dis-moi ce que tu as vérifié et ce qui reste douteux.",
+        ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
     # random topic; the command is harmless when the network blocks it.
@@ -660,19 +678,46 @@ def _ci_probe(repo):
 
 def _ci_snapshot():
     """The latest GitHub Actions run of the current repository ({"state",
-    "url"}, or None when unknown). Public data, looked up at most every
-    150 s — the unauthenticated API allows only 60 requests an hour."""
+    "url", "fresh"}, or None when unknown). Public data, looked up every
+    150 s (40 s while a run is going) — the unauthenticated API allows only
+    60 requests an hour. fresh: the run is green and is a new one the user
+    has not been told about yet, i.e. there is something to go and look at
+    (the first run ever seen is taken as already known)."""
     with lock:
         repo = current_repo
     if not repo:
         return None
     with site_lock:
-        fresh = ci_cache["repo"] == repo
-        info = ci_cache["info"] if fresh else None
-        if (not fresh or time.time() - ci_cache["at"] > 150) and not ci_cache["busy"]:
+        known = ci_cache["repo"] == repo
+        info = ci_cache["info"] if known else None
+        ttl = 40 if info and info.get("state") == "running" else 150
+        if (not known or time.time() - ci_cache["at"] > ttl) and not ci_cache["busy"]:
             ci_cache["busy"] = True
             threading.Thread(target=_ci_probe, args=(repo,), daemon=True).start()
-    return info
+    if not info:
+        return None
+    result = dict(info, fresh=False)
+    if info.get("state") == "success" and info.get("id") is not None:
+        with lock:
+            seen = ci_seen.get(repo)
+            if seen is None:
+                ci_seen[repo] = info["id"]
+                _save_state()
+            else:
+                result["fresh"] = seen != info["id"]
+    return result
+
+
+def _ci_acknowledge():
+    """The user went to look: this run is no longer news."""
+    with lock:
+        repo = current_repo
+    with site_lock:
+        info = ci_cache["info"] if ci_cache["repo"] == repo else None
+    if repo and info and info.get("id") is not None:
+        with lock:
+            ci_seen[repo] = info["id"]
+            _save_state()
 
 
 def _repo_choices():
@@ -845,6 +890,9 @@ class Handler(BaseHTTPRequestHandler):
             if session:
                 _update_session(session, effort=requested)
             self.reply_json({"accepted": True, "effort": current_effort})
+        elif self.path == "/api/ci/seen":
+            _ci_acknowledge()
+            self.reply_json({"accepted": True})
         elif self.path == "/api/waiting/clear":
             _clear_waiting()
             self.reply_json({"accepted": True})
