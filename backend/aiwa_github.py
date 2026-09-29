@@ -11,10 +11,12 @@ What Aiwa does is small:
    (that is aiwa_server._compose);
  - check whether a GitHub Pages address answers, so a link can appear.
 
-Aiwa never logs in to GitHub, never calls its API and never asks for a
-token. If the user happens to have the `gh` CLI logged in already, it only
-adds their repositories to the list and lets a private repository be cloned
-here; without it everything still works.
+Aiwa never logs in to GitHub and never asks for a token. Repositories are
+discovered from public data (the public repositories of the owner of the
+checkout Aiwa came from, and of the owners of repositories already used);
+if the user happens to have the `gh` CLI logged in already, it also adds
+their private ones and lets a private repository be cloned here. Without
+either, everything still works.
 
 Nothing here is verified on a real phone.
 """
@@ -76,6 +78,52 @@ def site_answers(url):
             return 200 <= reply.status < 300
     except (OSError, ValueError):
         return False
+
+
+# --- discovering repositories without any credential -------------------------
+
+_owner_cache = {}
+
+
+def owner_repos(owner):
+    """The PUBLIC repositories of a GitHub user or organization, most
+    recently pushed first: a plain unauthenticated web request (public
+    data, no token). Cached ten minutes."""
+    cached = _owner_cache.get(owner)
+    if cached and time.time() - cached[0] < 600:
+        return cached[1]
+    try:
+        request = urllib.request.Request(
+            f"https://api.github.com/users/{owner}/repos?per_page=100&sort=pushed",
+            headers={"User-Agent": "aiwa", "Accept": "application/vnd.github+json"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as reply:
+            data = json.load(reply)
+        fetched_at = time.time()
+    except (OSError, ValueError):
+        data, fetched_at = [], time.time() - 540  # retry in a minute
+    repos = [
+        {"name": r["full_name"], "private": False}
+        for r in data
+        if isinstance(r, dict) and r.get("full_name") and not r.get("archived")
+    ]
+    _owner_cache[owner] = (fetched_at, repos)
+    return repos
+
+
+def checkout_owner():
+    """Whose repositories to offer first: the owner of the checkout Aiwa was
+    installed from (its `origin` remote), or AIWA_GITHUB_OWNER."""
+    override = os.environ.get("AIWA_GITHUB_OWNER", "").strip()
+    if override:
+        return override
+    root = Path(__file__).resolve().parent.parent
+    try:
+        done = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    repo = parse_repo(done.stdout) if done.returncode == 0 else None
+    return repo.split("/")[0] if repo else None
 
 
 # --- optional: an existing `gh` login -----------------------------------------

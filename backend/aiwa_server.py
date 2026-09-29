@@ -26,6 +26,7 @@ import pty
 import re
 import select
 import shlex
+import secrets
 import shutil
 import signal
 import struct
@@ -33,6 +34,7 @@ import subprocess
 import termios
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -47,12 +49,16 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 6
+BACKEND_VERSION = 7
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
 EXTRA_MAX = 600  # the user's own instruction text
+# The effort levels `/effort` and `claude --effort` accept (None = automatic).
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# A public relay Claude pings when it waits for an answer (see _compose).
+NTFY_SERVER = "https://ntfy.sh"
 
 # A cloud session needs a git repository to start from. Documented: a
 # local repo with at least one commit is uploaded as a bundle, no GitHub
@@ -78,12 +84,19 @@ cloud_busy = False
 # current_repo: the repository new sessions start on ("owner/name"; None =
 # the plain chat); push_main: push straight to the main branch (otherwise
 # to a work branch); autodeploy: publish with GitHub Pages through GitHub
-# Actions; notify_ask: alert me when you need an answer; extra: free text.
+# Actions; extra: free text. The alert instruction (ping the relay when you
+# wait for an answer) is always there — it is mandatory, not a switch.
 current_repo = None
 push_main = True
 autodeploy = False
-notify_ask = False
 extra = ""
+# None = the CLI's own default effort.
+current_effort = None
+# The relay topic (a random secret) and whether Claude has pinged it since
+# the user last sent a message or opened the session.
+waiting_topic = None
+waiting_lock = threading.Lock()
+waiting = {"since": None, "last_ping": None}
 github_error = None  # the last GitHub problem worth showing in the app
 # Whether the Pages address of current_repo answers, probed in the background.
 site_lock = threading.Lock()
@@ -96,21 +109,29 @@ followup_lock = threading.Lock()
 
 
 def _load_state():
-    global current_model, current_cloud, current_repo, push_main, autodeploy, notify_ask, extra
+    global current_model, current_cloud, current_repo, push_main, autodeploy, extra
+    global current_effort, waiting_topic
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return
-    if isinstance(data, dict):
-        model, cloud, repo = data.get("model"), data.get("cloud"), data.get("repo")
-        current_model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
-        current_cloud = cloud if isinstance(cloud, str) and CLOUD_ID_RE.fullmatch(cloud) else None
-        current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
-        push_main = data.get("push_main") is not False
-        autodeploy = data.get("autodeploy") is True
-        notify_ask = data.get("notify_ask") is True
-        text = data.get("extra")
-        extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
+        data = None
+    if not isinstance(data, dict):
+        data = {}
+    model, cloud, repo = data.get("model"), data.get("cloud"), data.get("repo")
+    current_model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
+    current_cloud = cloud if isinstance(cloud, str) and CLOUD_ID_RE.fullmatch(cloud) else None
+    current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
+    push_main = data.get("push_main") is not False
+    autodeploy = data.get("autodeploy") is True
+    text = data.get("extra")
+    extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
+    effort = data.get("effort")
+    current_effort = effort if effort in EFFORT_LEVELS else None
+    topic = data.get("topic")
+    valid = isinstance(topic, str) and re.fullmatch(r"aiwa-[a-f0-9]{24}", topic)
+    waiting_topic = topic if valid else "aiwa-" + secrets.token_hex(12)
+    if not valid:
+        _save_state()  # the topic must survive a restart: sessions were told it
 
 
 def _save_state():
@@ -120,7 +141,8 @@ def _save_state():
     try:
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
-            "push_main": push_main, "autodeploy": autodeploy, "notify_ask": notify_ask, "extra": extra,
+            "push_main": push_main, "autodeploy": autodeploy, "extra": extra,
+            "effort": current_effort, "topic": waiting_topic,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -295,7 +317,7 @@ def _instruction_lines(repo, branch, direct):
     """What the user's switches ask of Claude Code, in words. Claude Code
     does all of it itself, with its own GitHub access."""
     with lock:
-        deploy, alert, own = autodeploy, notify_ask, extra
+        deploy, own, topic = autodeploy, extra, waiting_topic
     lines = []
     if repo:
         lines.append(f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi.")
@@ -309,8 +331,14 @@ def _instruction_lines(repo, branch, direct):
                 "S'il n'y a pas encore de workflow Pages (actions/configure-pages, upload-pages-artifact, deploy-pages, déclenché à chaque push sur la branche principale), ajoute-le ; pas de branche gh-pages. "
                 "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi."
             )
-    if alert:
-        lines.append("Alerte : quand tu as terminé ou que tu attends une décision ou une réponse de ma part, envoie-moi une notification push si un outil te le permet, et termine par une question claire.")
+    # Mandatory, not a switch: it is how the widget learns that Claude is
+    # waiting (the CLI can't read a cloud reply back). A public relay, a
+    # random topic; the command is harmless when the network blocks it.
+    lines.append(
+        "Alerte (obligatoire) : à la fin de CHAQUE réponse — quand tu as terminé, ou que tu attends une réponse, "
+        f"une décision ou une validation de ma part — exécute cette commande shell pour me prévenir : `curl -s -m 5 -d attend {NTFY_SERVER}/{topic}` "
+        "(si le réseau la bloque, ignore l'erreur et continue). Termine ensuite ta réponse par ta question s'il y en a une."
+    )
     if own:
         lines.append(f"Consigne perso : {own}")
     return lines
@@ -321,12 +349,13 @@ def _compose(entry, repo, branch, direct):
     block goes with a session's first message and whenever it changed;
     otherwise a one-line reminder, so the conversation isn't buried."""
     lines = _instruction_lines(repo, branch, direct)
-    if not lines:
-        return "", None
     fingerprint = hashlib.sha1("\n".join(lines).encode()).hexdigest()[:10]
     previous = (entry or {}).get("instr")
     if previous == fingerprint:
-        return f"\n\n[Aiwa] Mêmes consignes que précédemment{f' (dépôt {repo})' if repo else ''}.", fingerprint
+        return (
+            f"\n\n[Aiwa] Mêmes consignes que précédemment{f' (dépôt {repo})' if repo else ''}. "
+            "N'oublie pas la commande d'alerte à la fin de ta réponse."
+        ), fingerprint
     header = "consignes mises à jour" if previous else "consignes de cette conversation"
     return f"\n\n[Aiwa — {header}]\n" + "\n".join(f"- {line}" for line in lines), fingerprint
 
@@ -418,6 +447,8 @@ def cloud_send(text, command=False):
             return {"ok": False, "error": "aucune session en cours"}
         cloud_busy = True
     title = " ".join(text.split())[:50]
+    if not command:
+        _clear_waiting()  # the user answered: whatever Claude was waiting for is over
     try:
         if session_id:
             sent, fingerprint = text, None
@@ -448,7 +479,9 @@ def cloud_send(text, command=False):
         task = text + extra_text
         if task.lstrip().startswith("-"):
             task = "Message : " + task
-        command_line = ["claude"] + (["--model", model] if model else []) + ["--cloud", task]
+        with lock:
+            effort = current_effort
+        command_line = ["claude"] + (["--model", model] if model else []) + (["--effort", effort] if effort else []) + ["--cloud", task]
         # Under `script` the CLI gets a full terminal including a
         # controlling one (a bare pty has none, and a program that opens
         # /dev/tty then fails); without `script` it just gets the pty.
@@ -464,6 +497,14 @@ def cloud_send(text, command=False):
             from_url = CLOUD_ID_RE.search(url)
             found = from_url.group(0) if from_url else None
         print(f"[{_ts()}] cloud_send: created={found!r} code={code} {timeline[-1]}", flush=True)
+        if repo and found and re.search(r"bundl", output, re.I):
+            # Documented: without access to the GitHub remote, Claude Code
+            # uploads the local directory instead of cloning — here an empty
+            # stub or a stale clone. Unverified wording, hence the hedge.
+            github_error = (
+                f"La session semble avoir reçu une copie locale au lieu de cloner {repo} : "
+                "Claude n'a peut-être pas accès à ce dépôt (autorise-le sur claude.ai/connect-github)."
+            )
         if found is None:
             reason = "délai dépassé" if timed_out else f"aucun identifiant de session trouvé (code {code})"
             return {"ok": False, "error": reason + " — sortie : " + output.strip()[-600:]}
@@ -511,14 +552,71 @@ def _repo_choices():
     """Known repositories first (most recently used), then the ones a
     connected `gh` knows about, if there is one."""
     seen, choices = set(), []
-    for name in _known_repos():
-        seen.add(name)
-        choices.append({"name": name, "private": False})
-    for item in github.gh_repos():
+
+    def offer(item):
         if item["name"] not in seen:
             seen.add(item["name"])
             choices.append(item)
+
+    known = _known_repos()
+    for name in known:
+        offer({"name": name, "private": False})
+    # Discovered on their own: the public repositories of the owner of the
+    # checkout Aiwa came from, and of the owners of repositories already used.
+    owners = []
+    for owner in [github.checkout_owner()] + [name.split("/")[0] for name in known]:
+        if owner and owner not in owners:
+            owners.append(owner)
+    for owner in owners[:3]:
+        for item in github.owner_repos(owner):
+            offer(item)
+    for item in github.gh_repos():
+        offer(item)
     return choices
+
+
+def _ping_seen(text):
+    with waiting_lock:
+        waiting["since"] = waiting["last_ping"] = time.time()
+    print(f"[{_ts()}] alert received from the relay: {text[:40]!r}", flush=True)
+
+
+def _relay_listener():
+    """Listens to the relay topic Claude pings when it waits for an answer.
+    Forever, reconnecting with a growing pause: an unreachable relay just
+    means no alert."""
+    backoff, since = 5, str(int(time.time()))
+    while True:
+        try:
+            request = urllib.request.Request(f"{NTFY_SERVER}/{waiting_topic}/json?since={since}", headers={"User-Agent": "aiwa"})
+            with urllib.request.urlopen(request, timeout=90) as reply:
+                backoff = 5
+                for raw in reply:
+                    try:
+                        event = json.loads(raw)
+                    except ValueError:
+                        continue
+                    if event.get("id"):
+                        since = event["id"]
+                    if event.get("event") == "message":
+                        _ping_seen(str(event.get("message", "")))
+        except (OSError, ValueError):
+            pass
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 60)
+
+
+def _clear_waiting():
+    with waiting_lock:
+        waiting["since"] = None
+
+
+def _relay_test():
+    """A ping sent by Aiwa itself: proves the phone side (relay reachable
+    and listened to) — not that Claude's session may reach the relay."""
+    request = urllib.request.Request(f"{NTFY_SERVER}/{waiting_topic}", data=b"test", method="POST", headers={"User-Agent": "aiwa"})
+    with urllib.request.urlopen(request, timeout=10):
+        pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -535,10 +633,13 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 model, cloud_session = current_model, current_cloud
                 repo, direct, problem = current_repo, push_main, github_error
-                deploy, alert, own = autodeploy, notify_ask, extra
+                deploy, own, effort = autodeploy, extra, current_effort
+            with waiting_lock:
+                is_waiting, last_ping = waiting["since"] is not None, waiting["last_ping"]
             self.reply_json({
-                "version": BACKEND_VERSION, "model": model, "cloud_session": cloud_session,
-                "repo": repo, "push_main": direct, "autodeploy": deploy, "notify": alert, "extra": own,
+                "version": BACKEND_VERSION, "model": model, "effort": effort, "cloud_session": cloud_session,
+                "repo": repo, "push_main": direct, "autodeploy": deploy, "extra": own,
+                "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "github_error": problem,
             })
         elif self.path == "/api/cloud/sessions":
@@ -551,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global current_model, current_cloud, current_repo, push_main, autodeploy, notify_ask, extra
+        global current_model, current_cloud, current_repo, push_main, autodeploy, extra, current_effort
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -569,6 +670,7 @@ class Handler(BaseHTTPRequestHandler):
             if target != "new" and not CLOUD_ID_RE.fullmatch(target):
                 self.reply_json({"accepted": False, "reason": "invalid cloud session"})
                 return
+            _clear_waiting()
             with lock:
                 current_cloud = None if target == "new" else target
                 if target != "new":
@@ -591,6 +693,26 @@ class Handler(BaseHTTPRequestHandler):
                 current_model = requested or None
                 _save_state()
             self.reply_json({"accepted": True, "model": current_model})
+        elif self.path == "/api/effort":
+            # "" = automatic. Passed to `claude --effort` when a new cloud
+            # session is created; the app also sends /effort to the open one.
+            requested = body.strip()
+            if requested and requested not in EFFORT_LEVELS:
+                self.reply_json({"accepted": False, "reason": "invalid effort"})
+                return
+            with lock:
+                current_effort = requested or None
+                _save_state()
+            self.reply_json({"accepted": True, "effort": current_effort})
+        elif self.path == "/api/waiting/clear":
+            _clear_waiting()
+            self.reply_json({"accepted": True})
+        elif self.path == "/api/waiting/test":
+            try:
+                _relay_test()
+                self.reply_json({"accepted": True})
+            except OSError as err:
+                self.reply_json({"accepted": False, "reason": f"relais injoignable : {err}"})
         elif self.path == "/api/repo":
             # "" = the plain chat. Changing repository means the next
             # message starts a NEW session: a session's repository is fixed
@@ -632,8 +754,6 @@ class Handler(BaseHTTPRequestHandler):
                     push_main = options["push_main"]
                 if isinstance(options.get("autodeploy"), bool):
                     autodeploy = options["autodeploy"]
-                if isinstance(options.get("notify"), bool):
-                    notify_ask = options["notify"]
                 if isinstance(options.get("extra"), str):
                     extra = options["extra"].strip()[:EXTRA_MAX]
                 _save_state()
@@ -644,5 +764,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     _load_state()
+    threading.Thread(target=_relay_listener, daemon=True).start()
     print(f"Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

@@ -6,29 +6,47 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 6
+const val EXPECTED_BACKEND_VERSION = 7
 
 data class ModelChoice(val id: String?, val label: String)
 
-// The aliases Claude Code documents (code.claude.com, model-config). The
-// choice is REAL in two places: `claude --model` when a new cloud session
-// is created, and `/model <alias>` sent to the current session (cloud
-// sessions document /model as taking its value as an argument). null id =
-// the CLI's own default ("/model default" in a running session). Fable is
-// given by full id: its alias may not exist in an older CLI.
+// The models Claude Code documents (code.claude.com, model-config), with
+// their exact ids. The choice is REAL in two places: `claude --model` when a
+// new cloud session is created, and `/model <id>` sent to the open session
+// (confirmed on a device: the session answers "Set model to ..."). null id =
+// the account's default ("/model default", currently Opus 5.5). The Claude
+// app's own model chip does NOT follow /model — Aiwa can't drive it.
 val MODEL_CHOICES = listOf(
-    ModelChoice(null, "Auto"),
-    ModelChoice("claude-fable-5-1", "Fable"),
-    ModelChoice("opus", "Opus"),
-    ModelChoice("sonnet", "Sonnet"),
-    ModelChoice("haiku", "Haiku"),
-    ModelChoice("fable[1m]", "Fable 1M"),
-    ModelChoice("opus[1m]", "Opus 1M"),
-    ModelChoice("sonnet[1m]", "Sonnet 1M"),
-    ModelChoice("opusplan", "Opus plan"),
+    ModelChoice(null, "Auto (défaut du compte)"),
+    ModelChoice("claude-fable-5-1", "Fable 5.1"),
+    ModelChoice("claude-fable-5", "Fable 5"),
+    ModelChoice("claude-opus-5-5", "Opus 5.5"),
+    ModelChoice("claude-opus-5", "Opus 5"),
+    ModelChoice("claude-opus-4-8", "Opus 4.8"),
+    ModelChoice("claude-opus-4-7", "Opus 4.7"),
+    ModelChoice("claude-opus-4-6", "Opus 4.6"),
+    ModelChoice("claude-sonnet-5-5", "Sonnet 5.5"),
+    ModelChoice("claude-sonnet-5", "Sonnet 5"),
+    ModelChoice("claude-sonnet-4-6", "Sonnet 4.6"),
+    ModelChoice("claude-haiku-4-5", "Haiku 4.5"),
+    ModelChoice("claude-fable-5-1[1m]", "Fable 5.1 · 1M"),
+    ModelChoice("claude-opus-4-8[1m]", "Opus 4.8 · 1M"),
+    ModelChoice("claude-sonnet-4-6[1m]", "Sonnet 4.6 · 1M"),
+    ModelChoice("opusplan", "Opus plan (Opus, puis Sonnet)"),
 )
 
-fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label ?: id ?: "Auto"
+fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label?.substringBefore(" (") ?: id ?: "Auto"
+
+// The effort levels `/effort` and `claude --effort` accept (null = automatic).
+// Not every model has all of them (Haiku's are not documented).
+val EFFORT_CHOICES = listOf(
+    ModelChoice(null, "Auto"),
+    ModelChoice("low", "Faible"),
+    ModelChoice("medium", "Moyen"),
+    ModelChoice("high", "Élevé"),
+    ModelChoice("xhigh", "Très élevé"),
+    ModelChoice("max", "Max"),
+)
 
 data class AiwaState(
     // Display name of the current cloud session, derived by BackendSync
@@ -46,8 +64,12 @@ data class AiwaState(
     val repo: String? = null,
     val pushMain: Boolean = true,
     val autodeploy: Boolean = false,
-    val notifyAsk: Boolean = false,
     val extra: String = "",
+    // Claude pinged the relay: it waits for an answer (the widget shows it).
+    // alertAt: epoch seconds of the last ping ever received, null = never.
+    val waiting: Boolean = false,
+    val alertAt: Long? = null,
+    val effort: String? = null,
     val siteUrl: String? = null,
     val siteState: String = "off",
     val githubError: String? = null,

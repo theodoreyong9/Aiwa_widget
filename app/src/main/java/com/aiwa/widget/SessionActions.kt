@@ -11,6 +11,10 @@ import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.BackendOutdatedException
 import com.aiwa.bridge.BusyException
 import com.aiwa.bridge.ClaudeBridge
+import com.aiwa.bridge.LocalClaudeBridge
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /** The widget has no message area, so its errors are toasts. */
 fun toastOnMain(context: Context, text: String) {
@@ -131,16 +135,57 @@ suspend fun switchOptions(
     bridge: ClaudeBridge,
     pushMain: Boolean? = null,
     autodeploy: Boolean? = null,
-    notify: Boolean? = null,
     extra: String? = null,
 ) {
     try {
-        bridge.setOptions(pushMain, autodeploy, notify, extra)
+        bridge.setOptions(pushMain, autodeploy, extra)
     } catch (err: Exception) {
         toastOnMain(context, describeFailure(context, err, "changer les consignes"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
+}
+
+/**
+ * Effort level (null = automatic): remembered for the next NEW session
+ * (`claude --effort`) and, when a session is open, sent to it as
+ * `/effort <level>` — cloud sessions document /effort as taking its value
+ * as an argument, like /model.
+ */
+suspend fun switchEffort(context: Context, bridge: ClaudeBridge, level: String?) {
+    var accepted = false
+    try {
+        bridge.selectEffort(level)
+        accepted = true
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "changer l'effort"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+    if (!accepted || AiwaRepository.state.value.cloudSessionId == null) return
+    val label = EFFORT_CHOICES.find { it.id == level }?.label ?: "Auto"
+    try {
+        val result = bridge.sendCloudCommand("/effort " + (level ?: "auto"))
+        toastOnMain(
+            context,
+            if (result.ok) "Effort « $label » demandé à la session (à confirmer dans Claude ↗)"
+            else "Effort « $label » non transmis à la session : ${result.error}",
+        )
+    } catch (err: BusyException) {
+        toastOnMain(context, "Un envoi est en cours : l'effort « $label » n'a pas été transmis à la session, choisis-le à nouveau.")
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "transmettre l'effort à la session"))
+    }
+}
+
+/** Why what is on the clipboard can't be imported as a cloud session — in words that say what to copy. */
+fun sessionLinkProblem(copied: String?): String {
+    val what = copied?.trim().orEmpty()
+    return if (what.isEmpty()) {
+        "Le presse-papiers est vide. Dans l'appli Claude, ouvre la session puis copie son lien (claude.ai/code/session_…)."
+    } else {
+        "Ce que tu as copié (« ${what.take(40)} ») n'est pas l'adresse d'une session. Il faut le lien claude.ai/code/session_… : dans l'appli Claude, ouvre la session puis copie son lien (pas le nom de la branche)."
+    }
 }
 
 /** A repository given as a GitHub link or owner/name (e.g. copied from the browser): remembered and selected. */
@@ -178,7 +223,7 @@ fun openClaudeApp(context: Context): Boolean {
     val url = state.cloudSessions.find { it.id == sessionId }?.url
     val target = Uri.parse(url?.takeIf { it.startsWith("https://claude.ai/") } ?: "https://claude.ai/code/$sessionId")
     fun view() = Intent(Intent.ACTION_VIEW, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    return try {
+    val opened = try {
         context.startActivity(view().setPackage(CLAUDE_APP_PACKAGE))
         true
     } catch (err: ActivityNotFoundException) {
@@ -189,4 +234,15 @@ fun openClaudeApp(context: Context): Boolean {
             false
         }
     }
+    if (opened && state.waiting) {
+        // The user goes to answer: the waiting indicator has done its job.
+        val appContext = context.applicationContext
+        CoroutineScope(Dispatchers.IO).launch {
+            val bridge = LocalClaudeBridge()
+            try { bridge.waitingClear() } catch (err: Exception) { }
+            BackendSync.refresh(bridge)
+            AiwaWidget().updateAll(appContext)
+        }
+    }
+    return opened
 }

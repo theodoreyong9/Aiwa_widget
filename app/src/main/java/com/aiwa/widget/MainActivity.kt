@@ -210,7 +210,7 @@ DropdownMenuItem(text={Text("Ajouter une session existante (lien copié)")},onCl
 sessionMenuExpanded=false
 val copied=clipboardText(context)
 if(copied==null||!CLOUD_ID_IN_TEXT.containsMatchIn(copied)){
-toastOnMain(context,"Aucun lien de session Claude dans le presse-papiers : copie l'adresse de la session (claude.ai/code/session_…).")
+toastOnMain(context,sessionLinkProblem(copied))
 }else{
 scope.launch{addCloudSession(context,bridge,copied)}
 }
@@ -226,6 +226,9 @@ if(notice!=null){
 Text(notice,color=MaterialTheme.colorScheme.error)
 }else if(state.cloudSessionId==null){
 Text("La conversation s'affiche dans l'appli Claude : envoie un message pour créer la session.")
+}
+if(state.waiting){
+Text("● Claude attend ta réponse",color=MaterialTheme.colorScheme.error)
 }
 if(state.cloudSessionId!=null){
 Button(onClick={if(!openClaudeApp(context))toastOnMain(context,"Impossible d'ouvrir l'appli Claude.")}){Text("Ouvrir Claude ↗")}

@@ -71,6 +71,7 @@ private fun Content(state: AiwaState) {
     val pill = rgb(android.graphics.Color.rgb(44, 44, 54))
     val micGrey = rgb(android.graphics.Color.rgb(84, 84, 94))
     val claudeOrange = rgb(android.graphics.Color.rgb(204, 120, 92))
+    val alertRed = rgb(android.graphics.Color.rgb(214, 69, 65))
     // While a message is on its way (creating a cloud session takes a few
     // seconds) the session button says so: the widget has no other place
     // to show progress.
@@ -97,7 +98,7 @@ private fun Content(state: AiwaState) {
         }
         Spacer(GlanceModifier.width(6.dp))
         Text(
-            text = "$sessionLabel  ▾",
+            text = "$sessionLabel ▾",
             style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
             maxLines = 1,
             modifier = GlanceModifier.defaultWeight()
@@ -122,7 +123,7 @@ private fun Content(state: AiwaState) {
         }
         Spacer(GlanceModifier.width(6.dp))
         Text(
-            text = modelLabel(state.model) + "  ▾",
+            text = modelLabel(state.model) + " ▾",
             style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
             maxLines = 1,
             modifier = GlanceModifier
@@ -135,12 +136,14 @@ private fun Content(state: AiwaState) {
         // before that there is nothing to open.
         if (state.cloudSessionId != null) {
             Spacer(GlanceModifier.width(6.dp))
+            // Red with a dot while Claude waits for an answer (it pinged
+            // the relay): the alert is this button, not a notification.
             Text(
-                text = "Claude ↗",
-                style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                text = if (state.waiting) "● Claude attend ↗" else "Claude ↗",
+                style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = if (state.waiting) FontWeight.Bold else FontWeight.Medium),
                 maxLines = 1,
                 modifier = GlanceModifier
-                    .background(claudeOrange)
+                    .background(if (state.waiting) alertRed else claudeOrange)
                     .cornerRadius(20.dp)
                     .padding(horizontal = 11.dp, vertical = 11.dp)
                     .clickable(actionStartActivity<OpenClaudeActivity>()),

@@ -65,13 +65,15 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         val site = json.optJSONObject("site")
         BackendStatus(
             model = json.str("model"),
+            effort = json.str("effort"),
             version = json.optInt("version", 0),
             cloudSession = json.str("cloud_session"),
             repo = json.str("repo"),
             pushMain = json.optBoolean("push_main", true),
             autodeploy = json.optBoolean("autodeploy", false),
-            notify = json.optBoolean("notify", false),
             extra = json.str("extra") ?: "",
+            waiting = json.optBoolean("waiting", false),
+            alertLast = if (json.isNull("alert_last")) null else json.optLong("alert_last"),
             site = SiteInfo(site?.str("url"), site?.str("state") ?: "off"),
             githubError = json.str("github_error"),
         )
@@ -81,6 +83,12 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     // created; null = the CLI's own default.
     override suspend fun selectModel(id: String?) = withContext(Dispatchers.IO) {
         requireAccepted(postText("/api/model", id ?: ""))
+    }
+
+    // low / medium / high / xhigh / max; null = automatic. Passed to
+    // `claude --effort` when a NEW cloud session is created.
+    override suspend fun selectEffort(level: String?) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/effort", level ?: ""))
     }
 
     override suspend fun listCloudSessions(): List<CloudSessionInfo> = withContext(Dispatchers.IO) {
@@ -157,13 +165,20 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     }
 
     // Only the options that are not null are changed.
-    override suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, notify: Boolean?, extra: String?) = withContext(Dispatchers.IO) {
+    override suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, extra: String?) = withContext(Dispatchers.IO) {
         val body = JSONObject()
         if (pushMain != null) body.put("push_main", pushMain)
         if (autodeploy != null) body.put("autodeploy", autodeploy)
-        if (notify != null) body.put("notify", notify)
         if (extra != null) body.put("extra", extra)
         requireAccepted(postText("/api/options", body.toString()))
+    }
+
+    override suspend fun waitingClear() = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/waiting/clear", ""))
+    }
+
+    override suspend fun waitingTest() = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/waiting/test", ""))
     }
 
     override suspend fun instructions(): String = withContext(Dispatchers.IO) {

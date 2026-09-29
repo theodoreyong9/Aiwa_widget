@@ -4,4 +4,4 @@
      repository and push mode) when the widget is at least two cells high;
      it can be shrunk to the single row. The lists open in floating picker windows, so they need
      no room in the widget. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="340dp" android:minHeight="110dp" android:minResizeWidth="250dp" android:minResizeHeight="56dp" android:targetCellWidth="6" android:targetCellHeight="2" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="360dp" android:minHeight="110dp" android:minResizeWidth="250dp" android:minResizeHeight="56dp" android:targetCellWidth="6" android:targetCellHeight="2" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />

@@ -24,12 +24,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.glance.appwidget.updateAll
 import androidx.lifecycle.Lifecycle
 import com.aiwa.bridge.LocalClaudeBridge
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val CLAUDE_GITHUB_URL = "https://claude.ai/connect-github"
+private const val CLAUDE_CODE_URL = "https://claude.ai/code"
+
+// "il y a 3 min" — when Claude last pinged the relay (epoch seconds), or that it never did.
+private fun alertText(state: AiwaState): String {
+    val at = state.alertAt ?: return "Aucun ping reçu pour l'instant."
+    val seconds = (System.currentTimeMillis() / 1000 - at).coerceAtLeast(0)
+    val ago = when {
+        seconds < 90 -> "à l'instant"
+        seconds < 3600 -> "il y a ${seconds / 60} min"
+        seconds < 86400 -> "il y a ${seconds / 3600} h"
+        else -> "il y a ${seconds / 86400} j"
+    }
+    return "Dernier ping reçu : $ago."
+}
 
 private fun siteText(state: AiwaState): String = when (state.siteState) {
     "live" -> "Site en ligne : ${state.siteUrl}"
@@ -49,6 +64,7 @@ fun GithubCard(state: AiwaState) {
     val scope = rememberCoroutineScope()
     val bridge = remember { LocalClaudeBridge() }
     var repoText by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf(false) }
     var extraText by remember(state.extra) { mutableStateOf(state.extra) }
     var preview by remember { mutableStateOf("") }
     // While the card is on screen, follow the backend (the site link
@@ -61,7 +77,7 @@ fun GithubCard(state: AiwaState) {
         }
     }
     // The exact text Claude Code receives, reloaded whenever a setting changes.
-    LaunchedEffect(state.repo, state.pushMain, state.autodeploy, state.notifyAsk, state.extra, state.cloudSessionId) {
+    LaunchedEffect(state.repo, state.pushMain, state.autodeploy, state.extra, state.cloudSessionId) {
         preview = try { bridge.instructions() } catch (err: Exception) { "" }
     }
     Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
@@ -73,22 +89,27 @@ fun GithubCard(state: AiwaState) {
                 Text("Dépôt : ${state.repo ?: "aucun (chat libre)"}", Modifier.weight(1f))
                 Button(onClick = { context.startActivity(Intent(context, RepoPickerActivity::class.java)) }) { Text("Choisir") }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = repoText,
-                    onValueChange = { repoText = it },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    label = { Text("github.com/proprietaire/nom") },
-                )
-                Button(
-                    enabled = repoText.isNotBlank(),
-                    onClick = {
-                        val text = repoText
-                        repoText = ""
-                        scope.launch { addRepoFromText(context, bridge, text) }
-                    },
-                ) { Text("Ajouter") }
+            // The list in the widget is discovered on its own; this is only for
+            // a repository that isn't in it (a private one, for instance).
+            TextButton(onClick = { manual = !manual }) { Text(if (manual) "Masquer la saisie" else "Un dépôt absent de la liste ?") }
+            if (manual) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = repoText,
+                        onValueChange = { repoText = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        label = { Text("github.com/proprietaire/nom") },
+                    )
+                    Button(
+                        enabled = repoText.isNotBlank(),
+                        onClick = {
+                            val text = repoText
+                            repoText = ""
+                            scope.launch { addRepoFromText(context, bridge, text) }
+                        },
+                    ) { Text("Ajouter") }
+                }
             }
             if (state.repo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -106,10 +127,24 @@ fun GithubCard(state: AiwaState) {
                     Button(onClick = { openUrl(context, url) }) { Text("Ouvrir le site ↗") }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Me prévenir (notification push) quand Claude attend une réponse", Modifier.weight(1f))
-                Switch(checked = state.notifyAsk, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, notify = next) } })
-            }
+            Text("Alerte « Claude attend »", style = MaterialTheme.typography.titleSmall)
+            Text("Toujours active : chaque message demande à Claude d'envoyer un ping à la fin de sa réponse, et le bouton Claude du widget passe au rouge tant que tu n'as pas répondu ou ouvert la session.")
+            Text(alertText(state))
+            Button(onClick = {
+                scope.launch {
+                    try {
+                        bridge.waitingTest()
+                        toastOnMain(context, "Ping envoyé : dans quelques secondes le bouton Claude du widget passe au rouge.")
+                    } catch (err: Exception) {
+                        toastOnMain(context, "Relais injoignable : ${err.message}")
+                    }
+                    delay(2_500)
+                    BackendSync.refresh(bridge)
+                    AiwaWidget().updateAll(context)
+                }
+            }) { Text("Tester l'alerte (côté téléphone)") }
+            Text("Pour que Claude puisse envoyer le ping depuis sa session cloud, l'environnement doit autoriser le domaine ntfy.sh : menu de l'environnement (barre de titre de la session) → Modifier → Accès réseau : Personnalisé → ajouter ntfy.sh. Sans cela le ping échoue, sans danger, et le bouton reste normal.")
+            TextButton(onClick = { openUrl(context, CLAUDE_CODE_URL) }) { Text("Ouvrir claude.ai/code ↗") }
             OutlinedTextField(
                 value = extraText,
                 onValueChange = { extraText = it.take(600) },

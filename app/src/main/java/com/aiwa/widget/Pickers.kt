@@ -40,7 +40,8 @@ import kotlinx.coroutines.launch
 // windows (same translucent, own-task setup as DictateActivity) instead,
 // so the widget itself can stay a single compact row.
 
-class PickerEntry(val label: String, val active: Boolean, val onClick: () -> Unit)
+// header: a section title, not something to tap.
+class PickerEntry(val label: String, val active: Boolean, val header: Boolean = false, val onClick: () -> Unit)
 
 @Composable
 private fun PickerSheet(entries: List<PickerEntry>, onDismiss: () -> Unit) {
@@ -54,17 +55,26 @@ private fun PickerSheet(entries: List<PickerEntry>, onDismiss: () -> Unit) {
             Surface(
                 shape = RoundedCornerShape(20.dp),
                 tonalElevation = 6.dp,
-                modifier = Modifier.padding(24.dp).fillMaxWidth().heightIn(max = 420.dp),
+                modifier = Modifier.padding(24.dp).fillMaxWidth().heightIn(max = 460.dp),
             ) {
                 LazyColumn(Modifier.padding(vertical = 8.dp)) {
                     items(entries) { entry ->
-                        Text(
-                            text = (if (entry.active) "●  " else "    ") + entry.label,
-                            color = if (entry.active) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                            maxLines = 2,
-                            modifier = Modifier.fillMaxWidth().clickable { entry.onClick() }
-                                .padding(horizontal = 20.dp, vertical = 14.dp),
-                        )
+                        if (entry.header) {
+                            Text(
+                                text = entry.label,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 4.dp),
+                            )
+                        } else {
+                            Text(
+                                text = (if (entry.active) "●  " else "    ") + entry.label,
+                                color = if (entry.active) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                                maxLines = 2,
+                                modifier = Modifier.fillMaxWidth().clickable { entry.onClick() }
+                                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                            )
+                        }
                     }
                 }
             }
@@ -105,7 +115,7 @@ class SessionPickerActivity : ComponentActivity() {
     private fun addFromClipboard() {
         val text = clipboardText(this)
         if (text == null || !CLOUD_ID_IN_TEXT.containsMatchIn(text)) {
-            toastOnMain(this, "Aucun lien de session Claude dans le presse-papiers : copie l'adresse de la session (claude.ai/code/session_…).")
+            toastOnMain(this, sessionLinkProblem(text))
             finish()
             return
         }
@@ -115,28 +125,46 @@ class SessionPickerActivity : ComponentActivity() {
     }
 }
 
+// Model and effort, like the Claude app's own chip ("Sonnet 5.5 · Moyen"):
+// both are sent to the open session (/model, /effort) and remembered for the
+// next new one.
 class ModelPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             val state by AiwaRepository.state.collectAsState()
             LaunchedEffect(Unit) { BackendSync.refresh(LocalClaudeBridge()) }
-            val entries = MODEL_CHOICES.map { choice ->
-                PickerEntry(choice.label, choice.id == state.model) { pick(choice.id) }
+            val entries = buildList {
+                add(PickerEntry("Modèle", false, header = true) { })
+                MODEL_CHOICES.forEach { choice ->
+                    add(PickerEntry(choice.label, choice.id == state.model) { pickModel(choice.id) })
+                }
+                add(PickerEntry("Effort de raisonnement", false, header = true) { })
+                EFFORT_CHOICES.forEach { choice ->
+                    add(PickerEntry(choice.label, choice.id == state.effort) { pickEffort(choice.id) })
+                }
             }
             PickerSheet(entries) { finish() }
         }
     }
 
-    private fun pick(modelId: String?) {
+    private fun pickModel(modelId: String?) {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchModel(appContext, LocalClaudeBridge(), modelId) }
     }
+
+    private fun pickEffort(level: String?) {
+        val appContext = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { switchEffort(appContext, LocalClaudeBridge(), level) }
+    }
 }
 
 // The repository the next NEW session starts on (Claude works there and
-// pushes to it). The list comes from the user's own `gh` login.
+// pushes to it). The list is discovered on its own by the backend: the
+// public repositories of the owner of the Aiwa checkout and of the owners
+// of repositories already used, plus the ones of an existing `gh` login.
 class RepoPickerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -150,17 +178,15 @@ class RepoPickerActivity : ComponentActivity() {
             }
             val entries = buildList {
                 add(PickerEntry("Aucun dépôt (chat libre)", state.repo == null) { pickRepo(null) })
-                repos?.forEach { r ->
-                    add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
+                val list = repos
+                if (list == null) {
+                    add(PickerEntry("Chargement des dépôts…", false) { })
+                } else {
+                    list.forEach { r ->
+                        add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
+                    }
+                    if (list.isEmpty()) add(PickerEntry("Aucun dépôt trouvé : ouvre Aiwa pour en saisir un", false) { finish() })
                 }
-                if (repos == null) add(PickerEntry("Chargement des dépôts…", false) { })
-                // Claude Code works in the repository with its own GitHub
-                // access, so a repository is simply added by its link.
-                add(PickerEntry("＋  Ajouter un dépôt (lien copié)", false) { addFromClipboard() })
-                add(PickerEntry("↗  Autoriser Claude sur GitHub (une fois)", false) {
-                    openUrl(this@RepoPickerActivity, "https://claude.ai/connect-github")
-                    finish()
-                })
             }
             PickerSheet(entries) { finish() }
         }
@@ -170,19 +196,5 @@ class RepoPickerActivity : ComponentActivity() {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchRepo(appContext, LocalClaudeBridge(), repo) }
-    }
-
-    // Read here, on the main thread of the focused activity (the only place
-    // Android hands the clipboard over).
-    private fun addFromClipboard() {
-        val text = clipboardText(this)
-        if (text == null || !GITHUB_REPO_IN_TEXT.containsMatchIn(text)) {
-            toastOnMain(this, "Aucun lien de dépôt GitHub dans le presse-papiers : copie l'adresse du dépôt (github.com/proprietaire/nom).")
-            finish()
-            return
-        }
-        val appContext = applicationContext
-        finish()
-        CoroutineScope(Dispatchers.Default).launch { addRepoFromText(appContext, LocalClaudeBridge(), text) }
     }
 }
