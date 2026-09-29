@@ -19,25 +19,38 @@ private const val TERMUX_BASH = "/data/data/com.termux/files/usr/bin/bash"
 // second server when one already answers. `[a]iwa_server.py` keeps pkill
 // from matching this very script's own command line.
 private val START_SCRIPT = listOf(
-    // What this script does, step by step, in ~/aiwa_start.log (overwritten at
-    // each run): its output otherwise goes nowhere, and "the backend did not
-    // start" could not be told apart from "Termux never ran the script".
-    "exec > \"\$HOME/aiwa_start.log\" 2>&1",
-    "echo \"=== \$(date) — Aiwa asked Termux to start the backend (arg: '\$1') ===\"",
+    // What this script does, step by step, in ~/aiwa_start.log (appended, cut
+    // when it grows): its output otherwise goes nowhere, and "the backend did
+    // not start" could not be told apart from "Termux never ran the script".
+    "log=\"\$HOME/aiwa_start.log\"",
+    "[ \"\$(wc -c < \"\$log\" 2>/dev/null || echo 0)\" -gt 20000 ] && : > \"\$log\"",
+    "exec >> \"\$log\" 2>&1",
+    "echo \"=== \$(date +%T) — Aiwa asked Termux to start the backend (arg: '\$1') ===\"",
     "cd \"\$HOME/aiwa_widget\" || { echo \"no ~/aiwa_widget checkout: run bootstrap.sh once\"; exit 1; }",
+    // ONE start at a time. The app, the widget's keep-alive service and the
+    // pickers can all ask for a start; while the port is not open yet (10-20 s)
+    // each ask used to launch its own proot Ubuntu — several at once made the
+    // phone crawl. start.sh records its pid in this file for as long as it runs.
+    "pidfile=\"\$HOME/.aiwa_start.pid\"",
+    "pid=\$(cat \"\$pidfile\" 2>/dev/null)",
+    "running() { [ -n \"\$1\" ] && grep -q start.sh \"/proc/\$1/cmdline\" 2>/dev/null; }",
+    "answers() { curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1; }",
+    "if running \"\$pid\" && ! answers; then echo \"a start is already in progress (pid \$pid): nothing to do\"; exit 0; fi",
     "old=\$(git rev-parse HEAD 2>/dev/null)",
     // Bounded: a slow network must not hold the start back for long.
-    "timeout 15 git pull --ff-only -q || echo \"git pull failed or timed out (code \$?), keeping the checkout as is\"",
+    "t0=\$(date +%s)",
+    "timeout 8 git pull --ff-only -q || echo \"git pull failed or timed out (code \$?), keeping the checkout as is\"",
     "new=\$(git rev-parse HEAD 2>/dev/null)",
-    "echo \"checkout \$old -> \$new\"",
+    "echo \"checkout \$old -> \$new (pull took \$(( \$(date +%s) - t0 )) s)\"",
     "if [ \"\$old\" != \"\$new\" ] || [ \"\$1\" = \"restart\" ]; then",
     "  pkill -f \"[a]iwa_server.py\" >/dev/null 2>&1",
-    // Wait for the old server to be really gone (usually well under a
-    // second) instead of a fixed pause.
-    "  for i in 1 2 3 4 5 6 7 8; do curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1 || break; sleep 0.5; done",
+    // Wait for the old server (and the start.sh that supervised it) to be really
+    // gone — usually well under a second — instead of a fixed pause.
+    "  for i in 1 2 3 4 5 6 7 8; do answers || break; sleep 0.5; done",
+    "  for i in 1 2 3 4 5 6; do running \"\$pid\" || break; sleep 0.5; done",
     "fi",
-    "if curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1; then echo \"already answering\"; exit 0; fi",
-    "echo \"starting backend/start.sh (log: ~/aiwa_backend.log)\"",
+    "if answers; then echo \"already answering\"; exit 0; fi",
+    "echo \"\$(date +%T) starting backend/start.sh (log: ~/aiwa_backend.log)\"",
     "exec bash \"\$HOME/aiwa_widget/backend/start.sh\"",
 ).joinToString("\n")
 

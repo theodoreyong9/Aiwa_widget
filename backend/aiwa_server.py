@@ -963,5 +963,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     _load_state()
     threading.Thread(target=_relay_listener, daemon=True).start()
-    print(f"Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
+    print(f"{time.strftime('%H:%M:%S')} Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
