@@ -26,7 +26,7 @@ class OpenClaudeActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             withContext(Dispatchers.IO) { BackendSync.refresh(LocalClaudeBridge()) }
             if (!openClaudeApp(this@OpenClaudeActivity)) {
-                val message = if (AiwaRepository.state.value.cloudSessionId == null) {
+                val message = if (AiwaRepository.state.value.cloudSessionId == null && AiwaRepository.state.value.lastSessionId == null) {
                     "Pas encore de session Claude : envoie d'abord un message."
                 } else {
                     "Impossible d'ouvrir l'appli Claude."

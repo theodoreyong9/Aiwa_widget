@@ -224,13 +224,13 @@ Text(statusLabel(state.status))
 val notice=state.notice
 if(notice!=null){
 Text(notice,color=MaterialTheme.colorScheme.error)
-}else if(state.cloudSessionId==null){
+}else if(state.cloudSessionId==null&&state.lastSessionId==null){
 Text("La conversation s'affiche dans l'appli Claude : envoie un message pour créer la session.")
 }
 if(state.waiting){
 Text("● Claude attend ta réponse",color=MaterialTheme.colorScheme.error)
 }
-if(state.cloudSessionId!=null){
+if(state.cloudSessionId!=null||state.lastSessionId!=null){
 Button(onClick={if(!openClaudeApp(context))toastOnMain(context,"Impossible d'ouvrir l'appli Claude.")}){Text("Ouvrir Claude ↗")}
 }
 // GitHub settings take whatever room is left, scrollable.

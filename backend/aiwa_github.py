@@ -191,55 +191,60 @@ SESSION_IN_TEXT = re.compile(r"(?:session|cse)_[A-Za-z0-9]+")
 
 
 def _branch_session(repo, branch):
-    """None when the branch isn't in this repository; otherwise
-    (repo, session id or None). A cloud session's commits carry a
-    `Claude-Session: https://claude.ai/code/session_…` line, which is how a
-    branch name leads back to its session. Only the commits that are on the
-    branch and NOT on the default branch count: a brand-new branch is cut
-    from a history that holds other sessions' links, and must not be
-    mistaken for one of them (no commit of its own yet = no session known)."""
+    """(repo, state, session id or None); state is "missing" (the repository
+    answers and has no such branch), "unreachable" (it doesn't answer — a
+    private repository without a login here, typically) or "found". A cloud
+    session's commits carry a `Claude-Session: https://claude.ai/code/session_…`
+    line, which is how a branch name leads back to its session. Only the
+    commits that are on the branch and NOT on the default branch count: a
+    brand-new branch is cut from a history that holds other sessions' links,
+    and must not be mistaken for one of them (no commit of its own yet = no
+    session known)."""
     url = f"{GITHUB_BASE}/{repo}.git"
     try:
-        if not _git(["ls-remote", "--heads", url, f"refs/heads/{branch}"], timeout=25).strip():
-            return None
+        if not _git(["ls-remote", "--heads", url, f"refs/heads/{branch}"], timeout=15).strip():
+            return (repo, "missing", None)
     except GithubError:
-        return None  # not there, or private without a login here
+        return (repo, "unreachable", None)
     default = default_branch(repo)
     with tempfile.TemporaryDirectory() as tmp:
         try:
             _git(["init", "-q", "--bare", tmp])
             refs = [f"refs/heads/{branch}:refs/aiwa/branch", f"refs/heads/{default}:refs/aiwa/default"]
             try:
-                _git(["fetch", "-q", "--depth", "50", "--filter=blob:none", url] + refs, cwd=tmp, timeout=60)
+                _git(["fetch", "-q", "--depth", "50", "--filter=blob:none", url] + refs, cwd=tmp, timeout=30)
             except GithubError:
-                _git(["fetch", "-q", "--depth", "50", url] + refs, cwd=tmp, timeout=90)
+                _git(["fetch", "-q", "--depth", "50", url] + refs, cwd=tmp, timeout=45)
             log = _git(["log", "-30", "--format=%B", "refs/aiwa/branch", "^refs/aiwa/default"], cwd=tmp)
         except GithubError:
-            return (repo, None)
+            return (repo, "found", None)
     match = SESSION_IN_TEXT.search(log)
-    return (repo, match.group(0) if match else None)
+    return (repo, "found", match.group(0) if match else None)
 
 
 def find_branch_session(repos, branch):
-    """Looks for a branch in these repositories (in parallel) and returns
-    (repo, session id or None) — preferring a repository where the session
-    could be read — or None when no repository has that branch."""
-    found_without_session = None
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = [pool.submit(_branch_session, repo, branch) for repo in repos]
-        try:
-            for future in as_completed(futures, timeout=50):
-                result = future.result()
-                if result is None:
-                    continue
-                if result[1]:
-                    for other in futures:
-                        other.cancel()
-                    return result
-                found_without_session = found_without_session or result
-        except Exception:
-            pass
-    return found_without_session
+    """Looks for a branch in these repositories, in parallel, for at most
+    ~35 s. Returns (result, tried): result is (repo, session id or None) —
+    a repository where the session could be read is preferred — or None when
+    no repository has that branch; tried lists (repo, state) for every
+    repository, so a refusal can say what was looked at."""
+    states = {repo: "trop lent" for repo in repos}
+    pool = ThreadPoolExecutor(max_workers=6)
+    futures = [pool.submit(_branch_session, repo, branch) for repo in repos]
+    best = None
+    try:
+        for future in as_completed(futures, timeout=35):
+            repo, state, session = future.result()
+            states[repo] = state
+            if state == "found":
+                if session:
+                    best = (repo, session)
+                    break
+                best = best or (repo, None)
+    except Exception:
+        pass  # timed out: what has not answered stays "trop lent"
+    pool.shutdown(wait=False, cancel_futures=True)
+    return best, list(states.items())
 
 
 def _git(args, cwd=None, timeout=300):
@@ -272,9 +277,9 @@ def prepare_repo_dir(repo, direct):
     """The local directory `claude --cloud` is started from: the cloud
     session clones the GitHub remote of this directory at its current
     branch (Anthropic's documented behaviour), with Claude's own access.
-    Returns (directory, branch Claude should push to): the default branch,
-    or with direct=False a fresh aiwa/<date> branch Claude is asked to
-    create itself."""
+    Returns (directory, branch Claude should push to, default branch): the
+    default branch itself, or with direct=False a fresh aiwa/<date> branch
+    Claude is asked to create itself."""
     url = f"{GITHUB_BASE}/{repo}.git"
     branch = default_branch(repo)
     dest = REPOS_DIR / repo.replace("/", "__")
@@ -298,5 +303,5 @@ def prepare_repo_dir(repo, direct):
             _git(["remote", "add", "origin", url], cwd=dest)
             _git(["-c", "user.name=aiwa", "-c", "user.email=aiwa@example.com", "commit", "-q", "--allow-empty", "-m", "stub"], cwd=dest)
     if direct:
-        return dest, branch
-    return dest, "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
+        return dest, branch, branch
+    return dest, "aiwa/" + time.strftime("%Y%m%d-%H%M%S"), branch

@@ -134,7 +134,7 @@ private fun Content(state: AiwaState) {
         )
         // Only once a session exists (Aiwa has created or selected one):
         // before that there is nothing to open.
-        if (state.cloudSessionId != null) {
+        if (state.cloudSessionId != null || state.lastSessionId != null) {
             Spacer(GlanceModifier.width(6.dp))
             // Red with a dot while Claude waits for an answer (it pinged
             // the relay): the alert is this button, not a notification.

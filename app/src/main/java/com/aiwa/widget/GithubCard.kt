@@ -113,13 +113,25 @@ fun GithubCard(state: AiwaState) {
             }
             if (state.repo != null) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Push direct sur la branche principale (sinon : une branche de travail)", Modifier.weight(1f))
+                    Text("Push direct sur la branche principale", Modifier.weight(1f))
                     Switch(checked = state.pushMain, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, pushMain = next) } })
                 }
+                Text(
+                    "Activé : Claude fait ses commits et les pousse directement sur la branche principale, sans pull request. " +
+                        "Désactivé : il travaille sur une branche à part (aiwa/date) et ne touche pas à la principale ; tu fusionnes toi-même. " +
+                        "S'applique dès ton prochain message, même dans la session en cours.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Déployer avec GitHub Pages (GitHub Actions)", Modifier.weight(1f))
+                    Text("Déployer avec GitHub Pages", Modifier.weight(1f))
                     Switch(checked = state.autodeploy, onCheckedChange = { next -> scope.launch { switchOptions(context, bridge, autodeploy = next) } })
                 }
+                Text(
+                    "Aiwa ne déploie rien lui-même : cette option ajoute à ton prochain message une consigne demandant à Claude de publier le site " +
+                        "avec un workflow GitHub Actions (sans branche gh-pages). Si Claude n'a pas le droit d'activer Pages ou de créer le workflow, " +
+                        "il te dit le réglage à faire. Le bouton « Site ↗ » apparaît quand l'adresse publique répond.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 val site = siteText(state)
                 if (site.isNotEmpty()) Text(site)
                 val url = state.siteUrl

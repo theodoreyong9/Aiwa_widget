@@ -10,6 +10,9 @@ data class BackendStatus(
     val effort: String? = null,
     val version: Int,
     val cloudSession: String?,
+    // The session most recently in use, kept when the next message will
+    // start a new one — so its conversation can still be opened.
+    val lastSession: String? = null,
     val repo: String? = null,
     val pushMain: Boolean = true,
     val autodeploy: Boolean = false,

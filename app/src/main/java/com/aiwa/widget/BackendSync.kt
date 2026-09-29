@@ -36,6 +36,7 @@ object BackendSync {
                 current.copy(
                     session = title ?: cloudId?.take(12) ?: "Nouvelle session",
                     cloudSessionId = cloudId,
+                    lastSessionId = status.lastSession,
                     cloudSessions = sessions,
                     model = status.model,
                     backendVersion = status.version,

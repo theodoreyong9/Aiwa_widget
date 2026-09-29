@@ -25,7 +25,7 @@ fun toastOnMain(context: Context, text: String) {
 private fun describeFailure(context: Context, err: Exception, what: String): String = when {
     isBackendUnreachable(err) -> autoStartBackendMessage(context)
     err is BackendOutdatedException -> err.message ?: "Backend obsolète"
-    else -> "Impossible de $what : ${err.message}"
+    else -> "$what : ${err.message}"
 }
 
 // Same shape the backend accepts (session_… / cse_… ids).
@@ -61,7 +61,7 @@ suspend fun switchCloud(context: Context, bridge: ClaudeBridge, target: String) 
     } catch (err: BusyException) {
         // Nothing to do: the refresh below shows what is real.
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer de session"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer de session"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -75,7 +75,9 @@ suspend fun addCloudSession(context: Context, bridge: ClaudeBridge, link: String
         bridge.addCloud(link)
         AiwaRepository.update { it.copy(notice = null) }
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "ajouter la session"))
+        val message = describeFailure(context, err, "Impossible d'ajouter la session")
+        toastOnMain(context, message)
+        AiwaRepository.update { it.copy(notice = message) }
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -96,7 +98,7 @@ suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?
     } catch (err: BusyException) {
         // Same as above: the refresh below shows what is real.
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer de modèle"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer de modèle"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -112,7 +114,7 @@ suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?
     } catch (err: BusyException) {
         toastOnMain(context, "Un envoi est en cours : le modèle « $label » n'a pas été transmis à la session, choisis-le à nouveau.")
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "transmettre le modèle à la session"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de transmettre le modèle à la session"))
     }
 }
 
@@ -121,7 +123,7 @@ suspend fun switchRepo(context: Context, bridge: ClaudeBridge, repo: String?) {
     try {
         bridge.selectRepo(repo)
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer de dépôt"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer de dépôt"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -142,7 +144,7 @@ suspend fun switchOptions(
     try {
         bridge.setOptions(pushMain, autodeploy, extra)
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer les consignes"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer les consignes"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -160,7 +162,7 @@ suspend fun switchEffort(context: Context, bridge: ClaudeBridge, level: String?)
         bridge.selectEffort(level)
         accepted = true
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "changer l'effort"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer l'effort"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -176,7 +178,7 @@ suspend fun switchEffort(context: Context, bridge: ClaudeBridge, level: String?)
     } catch (err: BusyException) {
         toastOnMain(context, "Un envoi est en cours : l'effort « $label » n'a pas été transmis à la session, choisis-le à nouveau.")
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "transmettre l'effort à la session"))
+        toastOnMain(context, describeFailure(context, err, "Impossible de transmettre l'effort à la session"))
     }
 }
 
@@ -189,7 +191,7 @@ suspend fun addRepoFromText(context: Context, bridge: ClaudeBridge, text: String
     try {
         bridge.addRepo(text)
     } catch (err: Exception) {
-        toastOnMain(context, describeFailure(context, err, "ajouter le dépôt"))
+        toastOnMain(context, describeFailure(context, err, "Impossible d'ajouter le dépôt"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
@@ -206,7 +208,8 @@ fun openUrl(context: Context, url: String): Boolean = try {
 private const val CLAUDE_APP_PACKAGE = "com.anthropic.claude"
 
 /**
- * Opens the current cloud session where its conversation actually lives:
+ * Opens the current cloud session (or, when the next message will start a
+ * new one, the last one) where its conversation actually lives:
  * the Claude app (Code tab). Aiwa can't show cloud replies itself, so this
  * is the one way to read them. The app is asked first (it may claim
  * claude.ai/code links); without it, whatever handles the link — the
@@ -215,7 +218,7 @@ private const val CLAUDE_APP_PACKAGE = "com.anthropic.claude"
  */
 fun openClaudeApp(context: Context): Boolean {
     val state = AiwaRepository.state.value
-    val sessionId = state.cloudSessionId ?: return false
+    val sessionId = state.cloudSessionId ?: state.lastSessionId ?: return false
     val url = state.cloudSessions.find { it.id == sessionId }?.url
     val target = Uri.parse(url?.takeIf { it.startsWith("https://claude.ai/") } ?: "https://claude.ai/code/$sessionId")
     fun view() = Intent(Intent.ACTION_VIEW, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

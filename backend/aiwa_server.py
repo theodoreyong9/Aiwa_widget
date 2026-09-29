@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 8
+BACKEND_VERSION = 9
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -78,6 +78,10 @@ lock = threading.Lock()  # guards the state below
 current_model = None
 # The cloud session messages go to; None = the next message creates one.
 current_cloud = None
+# The session most recently in use: kept when the next message is to start
+# a NEW one (a repository was chosen, "new session"), so the app can still
+# open the conversation you were in.
+last_cloud = None
 cloud_busy = False
 # Instructions integrated into the conversation (see _compose). Claude
 # Code does the work itself; these only tell it what the user wants:
@@ -110,7 +114,7 @@ followup_lock = threading.Lock()
 
 def _load_state():
     global current_model, current_cloud, current_repo, push_main, autodeploy, extra
-    global current_effort, waiting_topic
+    global current_effort, waiting_topic, last_cloud
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -120,6 +124,8 @@ def _load_state():
     model, cloud, repo = data.get("model"), data.get("cloud"), data.get("repo")
     current_model = model if isinstance(model, str) and MODEL_RE.fullmatch(model) else None
     current_cloud = cloud if isinstance(cloud, str) and CLOUD_ID_RE.fullmatch(cloud) else None
+    last = data.get("last_cloud")
+    last_cloud = last if isinstance(last, str) and CLOUD_ID_RE.fullmatch(last) else current_cloud
     current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
     push_main = data.get("push_main") is not False
     autodeploy = data.get("autodeploy") is True
@@ -142,7 +148,7 @@ def _save_state():
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
             "push_main": push_main, "autodeploy": autodeploy, "extra": extra,
-            "effort": current_effort, "topic": waiting_topic,
+            "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -265,7 +271,7 @@ def _load_cloud_sessions():
     return data if isinstance(data, list) else []
 
 
-def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None, model=None, effort=None):
+def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None, model=None, effort=None, home=None):
     """The CLI has no non-interactive way to LIST cloud sessions, so the
     ones Aiwa created or was given a link to are remembered here, with the
     repository (and branch) a session was started on and a fingerprint of
@@ -280,7 +286,7 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
             "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
         }
         # model / effort: "" = automatic, absent = unknown.
-        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort)):
+        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort), ("home", home)):
             value = existing.get(key) if value is None else value
             if value is not None:
                 entry[key] = value
@@ -400,6 +406,18 @@ def _last_json_object(output):
     return None
 
 
+def _retarget_session(session_id, direct):
+    """Push switched while a repository session is open: from its next
+    message Claude is told the new target — the session's home branch
+    (direct), or a fresh aiwa/<date> branch to create (work branch)."""
+    entry = _session_entry(session_id)
+    repo = entry.get("repo")
+    if not repo:
+        return
+    branch = (entry.get("home") or github.default_branch(repo)) if direct else "aiwa/" + time.strftime("%Y%m%d-%H%M%S")
+    _update_session(session_id, direct=direct, branch=branch)
+
+
 def _branch_candidates():
     """Repositories to look a branch up in: the current one, the ones of
     remembered sessions, then the discovered list (see _repo_choices)."""
@@ -411,7 +429,7 @@ def _branch_candidates():
         if name and name not in seen:
             seen.add(name)
             out.append(name)
-    return out[:15]
+    return out[:10]
 
 
 def cloud_add(text):
@@ -420,7 +438,7 @@ def cloud_add(text):
     branch (claude/…), which is looked up in the repositories Aiwa knows:
     a session's commits carry its link. Returns (session id, None), or
     (None, why not)."""
-    global current_cloud, current_repo
+    global current_cloud, current_repo, last_cloud
     match = CLOUD_ID_RE.search(text)
     repo = branch = None
     if match:
@@ -431,11 +449,15 @@ def cloud_add(text):
         if branch_match is None:
             return None, "Ce n'est ni le lien d'une session (claude.ai/code/session_…) ni le nom d'une branche claude/…"
         branch = branch_match.group(0).rstrip("/.")
-        found = github.find_branch_session(_branch_candidates(), branch)
+        found, tried = github.find_branch_session(_branch_candidates(), branch)
+        print(f"[{_ts()}] import by branch {branch}: tried {tried}", flush=True)
         if found is None:
+            wording = {"missing": "branche absente", "unreachable": "privé ou inaccessible", "trop lent": "trop lent"}
+            detail = ", ".join(f"{name} ({wording.get(state, state)})" for name, state in tried) or "aucun dépôt candidat"
             return None, (
-                f"La branche {branch} n'est dans aucun dépôt que je connais (dépôt choisi, dépôts déjà utilisés, "
-                "dépôts publics du propriétaire). Choisis d'abord son dépôt avec ⎇, puis recommence — ou copie le lien de la session."
+                f"Branche {branch} introuvable. Dépôts essayés : {detail}. "
+                "Un dépôt privé ne peut pas être lu par Aiwa : copie plutôt le lien de la session "
+                "(claude.ai/code/session_…) — ou la commande « claude --teleport session_… » si le menu de la session la propose."
             )
         repo, session_id = found
         if session_id is None:
@@ -446,9 +468,9 @@ def cloud_add(text):
         title = branch
     url_match = CLOUD_URL_RE.search(text)
     # An imported session works on its own branch: that is the only one Claude can push to.
-    _save_cloud_session(session_id, title, url_match.group(0) if url_match else None, repo=repo, branch=branch, direct=True if branch else None)
+    _save_cloud_session(session_id, title, url_match.group(0) if url_match else None, repo=repo, branch=branch, direct=True if branch else None, home=branch)
     with lock:
-        current_cloud = session_id
+        current_cloud = last_cloud = session_id
         current_repo = _session_entry(session_id).get("repo")
         _save_state()
     return session_id, None
@@ -492,7 +514,7 @@ def cloud_send(text, command=False):
     command=True: `text` is a slash command for the CURRENT session (e.g.
     `/model opus`); it never creates a session and leaves the session's
     name and rank in the list alone."""
-    global current_cloud, cloud_busy, github_error
+    global current_cloud, cloud_busy, github_error, last_cloud
     with lock:
         if cloud_busy:
             return {"ok": False, "error": "busy"}
@@ -518,13 +540,13 @@ def cloud_send(text, command=False):
             if not command:
                 _save_cloud_session(session_id, title, result["url"], instr=fingerprint)
             return {"ok": True, "session_id": session_id, "url": result["url"]}
-        directory, branch = CLOUD_DIR, None
+        directory, branch, base = CLOUD_DIR, None, None
         if repo:
             # The session starts on the chosen repository: the cloud clones
             # the GitHub remote of this directory itself, with Claude's own
             # access (the user grants it at claude.ai/connect-github).
             try:
-                directory, branch = github.prepare_repo_dir(repo, direct_now)
+                directory, branch, base = github.prepare_repo_dir(repo, direct_now)
             except github.GithubError as err:
                 github_error = f"dépôt {repo} : {err}"
                 return {"ok": False, "error": github_error}
@@ -565,9 +587,9 @@ def cloud_send(text, command=False):
             reason = "délai dépassé" if timed_out else f"aucun identifiant de session trouvé (code {code})"
             return {"ok": False, "error": reason + " — sortie : " + output.strip()[-600:]}
         with lock:
-            current_cloud = found
+            current_cloud = last_cloud = found
             _save_state()
-        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "")
+        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "", home=base)
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -694,6 +716,7 @@ class Handler(BaseHTTPRequestHandler):
                 is_waiting, last_ping = waiting["since"] is not None, waiting["last_ping"]
             self.reply_json({
                 "version": BACKEND_VERSION, "model": model, "effort": effort, "cloud_session": cloud_session,
+                "last_session": last_cloud,
                 "repo": repo, "push_main": direct, "autodeploy": deploy, "extra": own,
                 "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "github_error": problem,
@@ -708,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global current_model, current_cloud, current_repo, push_main, autodeploy, extra, current_effort
+        global current_model, current_cloud, current_repo, push_main, autodeploy, extra, current_effort, last_cloud
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -730,6 +753,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 current_cloud = None if target == "new" else target
                 if target != "new":
+                    last_cloud = target
                     # A session belongs to the repository it was started on,
                     # and keeps the model / effort last asked for it.
                     entry = _session_entry(target)
@@ -817,14 +841,20 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(options, dict):
                 self.reply_json({"accepted": False, "reason": "invalid options"})
                 return
+            retarget = None
             with lock:
                 if isinstance(options.get("push_main"), bool):
+                    if options["push_main"] != push_main and current_cloud:
+                        retarget = (current_cloud, options["push_main"])
                     push_main = options["push_main"]
                 if isinstance(options.get("autodeploy"), bool):
                     autodeploy = options["autodeploy"]
                 if isinstance(options.get("extra"), str):
                     extra = options["extra"].strip()[:EXTRA_MAX]
                 _save_state()
+            if retarget:
+                # The session in progress follows the switch from its next message.
+                threading.Thread(target=_retarget_session, args=retarget, daemon=True).start()
             self.reply_json({"accepted": True})
         else:
             self.send_error(404)

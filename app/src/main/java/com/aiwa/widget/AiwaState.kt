@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 8
+const val EXPECTED_BACKEND_VERSION = 9
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -53,6 +53,9 @@ data class AiwaState(
     // from the backend's real answer — never guessed locally.
     val session: String = "Nouvelle session",
     val cloudSessionId: String? = null,
+    // The session most recently in use: still there when a repository was
+    // chosen (the next message starts a NEW session) — "Claude ↗" opens it.
+    val lastSessionId: String? = null,
     val cloudSessions: List<CloudSessionInfo> = emptyList(),
     val model: String? = null,
     val backendVersion: Int = 0,
