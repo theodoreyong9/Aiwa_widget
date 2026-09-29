@@ -349,7 +349,7 @@ def _instruction_lines(repo, work, base, direct):
     """What the user's switches ask of Claude Code, in words, as (key, text)
     pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
-        deploy, own, topic = autodeploy, extra, waiting_topic
+        deploy, topic = autodeploy, waiting_topic
     lines = []
     if repo:
         lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
@@ -400,8 +400,10 @@ def _instruction_lines(repo, work, base, direct):
         f"une décision ou une validation de ma part — exécute cette commande shell pour me prévenir : `curl -s -m 5 -d attend {NTFY_SERVER}/{topic}` "
         "(si le réseau la bloque, ignore l'erreur et continue). Termine ensuite ta réponse par ta question s'il y en a une.",
     ))
-    if own:
-        lines.append(("extra", f"Consigne perso : {own}"))
+    # No free-text line any more: its only editor was in the app's settings card,
+    # removed when the app became a bare text field. A leftover text there would
+    # go on being sent with nothing left to show or clear it; a note to Claude is
+    # now simply written as a message.
     return lines
 
 

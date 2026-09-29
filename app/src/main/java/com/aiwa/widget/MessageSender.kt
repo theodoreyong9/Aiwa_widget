@@ -17,13 +17,13 @@ import kotlinx.coroutines.launch
  * when none is selected). Documented limit: the CLI only queues it — the
  * reply can't be read back — so Aiwa shows no conversation at all: the
  * exchange lives in the Claude app, one tap away ("Claude ↗"). Refused up
- * front while another send is running.
+ * front while another send is running. Returns whether the message went.
  */
-suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean = false) {
-    if (text.isBlank()) return
+suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean = false): Boolean {
+    if (text.isBlank()) return false
     if (AiwaRepository.state.value.status == AiwaState.Status.WORKING) {
         if (toastErrors) toastOnMain(context, "Un envoi est déjà en cours.")
-        return
+        return false
     }
     AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, notice = null) }
     // Fire-and-forget: makes sure a widget composition is alive to show
@@ -49,4 +49,5 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, t
     }
     if (toastErrors) toastOnMain(context, failure ?: "Envoyé — réponse dans l'appli Claude")
     BackendSync.refresh(bridge)
+    return failure == null
 }

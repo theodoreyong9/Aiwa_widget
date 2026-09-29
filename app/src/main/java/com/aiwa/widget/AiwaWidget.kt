@@ -90,8 +90,6 @@ private fun Content(state: AiwaState) {
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
     // Room for a second row (two rows of buttons plus the padding).
     val tall = LocalSize.current.height >= 96.dp
-    // Room for one more pill on the GitHub row (the link to the Actions).
-    val wide = LocalSize.current.width >= 400.dp
     Column(
         modifier = GlanceModifier.fillMaxSize()
             .background(rgb(android.graphics.Color.rgb(22, 22, 28)))
@@ -170,8 +168,58 @@ private fun Content(state: AiwaState) {
         // the Pages address answers) the link to the site. They are
         // instructions integrated into the conversation — Claude Code does
         // the work itself.
+        //
+        // What fits on this row is worked out, not hoped for (reported live: the
+        // Site and Actions pills overlapped). Widths are estimates — 12 sp text is
+        // about 6.8 dp per plain character and 12 dp per symbol, plus the pill's own
+        // 18 dp of padding, scaled by the user's font size. Push and Deploy are
+        // always there; the repository picker takes what is left (its name is cut
+        // to fit); the others are added while they fit, most useful first: "Prêt à
+        // voir", the Actions when they fail, Site, Actions.
+        val fontScale = LocalContext.current.resources.configuration.fontScale
+        fun textWidth(text: String): Float {
+            var width = 0f
+            for (c in text) width += if (c.code < 0x250) 6.8f else 12f
+            return width * fontScale
+        }
+        fun pillWidth(text: String): Float = 18f + textWidth(text)
+        val pushText = if (state.pushMain) "Push: main" else "Push: branche"
+        val deployText = if (state.autodeploy) "Deploy ●" else "Deploy ○"
+        val resultText = "● Prêt à voir ↗"
+        val live = state.siteState == "live"
+        val siteText = if (live) "Site ↗" else "Site … ↗"
+        val mark = when (state.ciState) {
+            "success" -> "✓"
+            "failure" -> "✗"
+            "running" -> "…"
+            else -> ""
+        }
+        val actionsText = "Actions $mark ↗".replace("  ", " ")
+        val site = state.siteUrl
+        val hasRepo = state.repo != null
+        // The address is known as soon as a repository is chosen
+        // (https://<owner>.github.io/<repo>/): the button is there once
+        // deployment is asked for, or as soon as the address answers. Orange =
+        // it answers; grey = not (yet) — it still opens.
+        val wantSite = !state.ciFresh && site != null && (state.autodeploy || live)
+        val wantActions = state.autodeploy || state.ciState != null
+        val totalWidth = LocalSize.current.width.value - 20f // minus the widget's own padding
+        var shown = if (hasRepo) 6f + pillWidth(pushText) + 6f + pillWidth(deployText) else 0f
+        var room = totalWidth - shown - (if (state.ciFresh) 56f else 84f) // the picker keeps at least this
+        fun fits(width: Float): Boolean {
+            if (!hasRepo || room < width + 6f) return false
+            room -= width + 6f
+            shown += width + 6f
+            return true
+        }
+        val showResult = state.ciFresh && fits(pillWidth(resultText))
+        var showActions = wantActions && state.ciState == "failure" && fits(pillWidth(actionsText))
+        val showSite = wantSite && fits(pillWidth(siteText))
+        if (wantActions && !showActions) showActions = fits(pillWidth(actionsText))
+        val repoName = state.repo?.substringAfter('/') ?: "GitHub"
+        val fitChars = ((totalWidth - shown - pillWidth("⎇  ▾")) / (6.8f * fontScale)).toInt()
+        val repoLabel = if (repoName.length <= fitChars) repoName else repoName.take((fitChars - 1).coerceAtLeast(1)) + "…"
         Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            val repoLabel = state.repo?.substringAfter('/')?.take(22) ?: "GitHub"
             Text(
                 text = "⎇ $repoLabel  ▾",
                 style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
@@ -179,82 +227,69 @@ private fun Content(state: AiwaState) {
                 modifier = GlanceModifier.defaultWeight()
                     .background(pill)
                     .cornerRadius(20.dp)
-                    .padding(horizontal = 11.dp, vertical = 11.dp)
+                    .padding(horizontal = 9.dp, vertical = 11.dp)
                     .clickable(actionStartActivity<RepoPickerActivity>()),
             )
-            if (state.repo != null) {
+            if (hasRepo) {
                 Spacer(GlanceModifier.width(6.dp))
                 Text(
-                    text = if (state.pushMain) "Push: main" else "Push: branche",
+                    text = pushText,
                     style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     maxLines = 1,
                     modifier = GlanceModifier
                         .background(if (state.pushMain) green else pill)
                         .cornerRadius(20.dp)
-                        .padding(horizontal = 11.dp, vertical = 11.dp)
+                        .padding(horizontal = 9.dp, vertical = 11.dp)
                         .clickable(actionRunCallback<TogglePushMainCallback>()),
                 )
                 Spacer(GlanceModifier.width(6.dp))
                 Text(
-                    text = if (state.autodeploy) "Deploy ●" else "Deploy ○",
+                    text = deployText,
                     style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                     maxLines = 1,
                     modifier = GlanceModifier
                         .background(if (state.autodeploy) green else pill)
                         .cornerRadius(20.dp)
-                        .padding(horizontal = 11.dp, vertical = 11.dp)
+                        .padding(horizontal = 9.dp, vertical = 11.dp)
                         .clickable(actionRunCallback<ToggleAutodeployCallback>()),
                 )
-                // The address is known as soon as a repository is chosen
-                // (https://<owner>.github.io/<repo>/): the button is there
-                // once deployment is asked for, or as soon as the address
-                // answers. Orange = it answers; grey = not (yet) — it still opens.
-                val site = state.siteUrl
-                val live = state.siteState == "live"
-                if (state.ciFresh) {
+                if (showResult) {
                     // A new green run the user hasn't seen: something to go and look at.
                     Spacer(GlanceModifier.width(6.dp))
                     Text(
-                        text = "● Prêt à voir ↗",
+                        text = resultText,
                         style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold),
                         maxLines = 1,
                         modifier = GlanceModifier
                             .background(green)
                             .cornerRadius(20.dp)
-                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .padding(horizontal = 9.dp, vertical = 11.dp)
                             .clickable(actionStartActivity<OpenResultActivity>()),
                     )
-                } else if (site != null && (state.autodeploy || live)) {
+                } else if (showSite && site != null) {
                     Spacer(GlanceModifier.width(6.dp))
                     Text(
-                        text = if (live) "Site ↗" else "Site … ↗",
+                        text = siteText,
                         style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                         maxLines = 1,
                         modifier = GlanceModifier
                             .background(if (live) claudeOrange else pill)
                             .cornerRadius(20.dp)
-                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .padding(horizontal = 9.dp, vertical = 11.dp)
                             .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),
                     )
                 }
-                // The state of the GitHub Actions, one tap from the run itself
-                // (a wide widget only; the app card always has it).
-                if (wide && (state.autodeploy || state.ciState != null)) {
+                // The state of the GitHub Actions, one tap from the run itself.
+                if (showActions) {
                     Spacer(GlanceModifier.width(6.dp))
-                    val mark = when (state.ciState) {
-                        "success" -> "✓"
-                        "failure" -> "✗"
-                        "running" -> "…"
-                        else -> ""
-                    }
                     Text(
-                        text = "Actions $mark ↗".replace("  ", " "),
+                        text = actionsText,
                         style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                         maxLines = 1,
                         modifier = GlanceModifier
                             .background(when (state.ciState) { "success" -> green; "failure" -> alertRed; else -> pill })
                             .cornerRadius(20.dp)
-                            .padding(horizontal = 11.dp, vertical = 11.dp)
+                            .padding(horizontal = 9.dp, vertical = 11.dp)
                             .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(state.ciUrl ?: "https://github.com/${state.repo}/actions")))),
                     )
                 }
