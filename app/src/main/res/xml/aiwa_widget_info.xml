@@ -4,5 +4,7 @@
      two cells, so there is no empty strip and nothing to customise (asked for:
      "une seule forme, pas de personnalisation"). minWidth / minHeight are the
      sizes for launchers older than Android 12, which ignore the target cells. To
-     see a change of shape, remove the widget and add it again. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="110dp" android:targetCellWidth="4" android:targetCellHeight="2" android:resizeMode="none" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:previewLayout="@layout/aiwa_widget_preview" android:previewImage="@drawable/aiwa_widget_preview" android:description="@string/widget_description" android:widgetCategory="home_screen" />
+     see a change of shape, remove the widget and add it again. widgetCategory
+     also says "keyguard": the widget may be put on the lock screen where the phone
+     lets other apps' widgets in (Settings > Lock screen > Widgets on a Samsung). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="110dp" android:targetCellWidth="4" android:targetCellHeight="2" android:resizeMode="none" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:previewLayout="@layout/aiwa_widget_preview" android:previewImage="@drawable/aiwa_widget_preview" android:description="@string/widget_description" android:widgetCategory="home_screen|keyguard" android:initialKeyguardLayout="@layout/aiwa_widget_placeholder" />
