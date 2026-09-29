@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- One compact row (session / mic / model), by explicit request. The
-     lists open in floating picker windows, so the widget needs no extra
-     height for them. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="40dp" android:minResizeWidth="180dp" android:targetCellWidth="4" android:targetCellHeight="1" android:resizeMode="horizontal" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />
+<!-- A row of buttons (session / mic / model) with the conversation under
+     it. Resizable down to the single row of buttons. The lists open in
+     floating picker windows, so they need no room in the widget. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="110dp" android:minResizeWidth="180dp" android:minResizeHeight="40dp" android:targetCellWidth="4" android:targetCellHeight="2" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />

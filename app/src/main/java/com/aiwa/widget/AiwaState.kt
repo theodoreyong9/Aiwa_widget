@@ -33,9 +33,11 @@ data class AiwaState(
     val sessions: List<SessionInfo> = emptyList(),
     val backendVersion: Int = 0,
     val status: Status = Status.READY,
-    // The full transcript — shown in the app only. The widget shows no
-    // conversation text at all (explicit request).
+    // The conversation transcript, shown by both the app and the widget.
     val output: String = "",
+    // Which session `output` already holds the on-disk history of, so
+    // the history is loaded exactly once per session (see BackendSync).
+    val historyFor: String? = null,
     val question: String? = null,
 ) {
     enum class Status { READY, WORKING, WAITING, DONE, ERROR }

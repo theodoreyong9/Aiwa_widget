@@ -1,5 +1,6 @@
 package com.aiwa.widget
 
+import com.aiwa.bridge.BackendOutdatedException
 import com.aiwa.bridge.BackendStatus
 import com.aiwa.bridge.ClaudeBridge
 import kotlinx.coroutines.delay
@@ -39,6 +40,36 @@ object BackendSync {
                     backendVersion = status.version,
                 )
             }
+        }
+        loadHistoryIfNeeded(bridge)
+    }
+
+    /**
+     * Reported live, twice: resuming a session didn't bring back its
+     * conversation, and the widget only showed new text after opening the
+     * app and coming back. The history used to be loaded by an effect
+     * inside the app's screen — so it only ever ran while that screen was
+     * open, and the widget (a separate surface) never got it. Loading it
+     * here, right after the backend's real session is known, covers every
+     * surface at once. Skipped mid-request so it can't clobber a
+     * streaming reply; the next refresh retries.
+     */
+    private suspend fun loadHistoryIfNeeded(bridge: ClaudeBridge) {
+        val current = AiwaRepository.state.value
+        val id = current.sessionId ?: return
+        if (current.status == AiwaState.Status.WORKING || current.historyFor == id) return
+        val history = try {
+            bridge.fetchHistory(id)
+        } catch (err: Exception) {
+            val message = when (err) {
+                is BackendOutdatedException -> err.message ?: "Backend obsolète"
+                else -> "[historique indisponible : ${err.message}]"
+            }
+            AiwaRepository.update { if (it.sessionId == id && it.status != AiwaState.Status.WORKING) it.copy(output = message) else it }
+            return
+        }
+        AiwaRepository.update {
+            if (it.sessionId == id && it.status != AiwaState.Status.WORKING) it.copy(output = history ?: "", historyFor = id) else it
         }
     }
 }

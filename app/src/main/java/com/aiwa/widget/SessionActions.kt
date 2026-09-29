@@ -31,9 +31,9 @@ private fun describeFailure(context: Context, err: Exception, what: String): Str
 suspend fun switchSession(context: Context, bridge: ClaudeBridge, sessionId: String?) {
     try {
         bridge.selectSession(sessionId)
-        // Only wipe the transcript when the session really changed; the
-        // app reloads the real history for the new id by itself.
-        AiwaRepository.update { if (it.sessionId == sessionId) it else it.copy(output = "") }
+        // Only wipe the transcript when the session really changed;
+        // BackendSync then loads the real history of the new one.
+        AiwaRepository.update { if (it.sessionId == sessionId) it else it.copy(output = "", historyFor = null) }
     } catch (err: BusyException) {
         // Refused because a request is in flight; the refresh below keeps
         // showing the session that is actually current.

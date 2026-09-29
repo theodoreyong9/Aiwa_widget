@@ -2,7 +2,11 @@ package com.aiwa.widget
 import android.content.Context
 import com.aiwa.bridge.BackendOutdatedException
 import com.aiwa.bridge.BusyException
+import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.ClaudeBridge
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * The one real send path — shared by MainActivity's "Envoyer"/mic and
@@ -31,6 +35,10 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, t
                         output = it.output + separator + "🧑 $text\n\n🤖 ",
                     )
                 }
+                // Fire-and-forget (collect must not block on it): makes sure
+                // a widget composition is alive to follow the streaming
+                // reply instead of only catching up when it finishes.
+                CoroutineScope(Dispatchers.Default).launch { AiwaWidget().updateAll(context) }
             } else if (chunk.isNotEmpty()) {
                 AiwaRepository.update { it.copy(output = it.output + chunk) }
             }

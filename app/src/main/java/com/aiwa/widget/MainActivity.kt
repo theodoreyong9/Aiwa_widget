@@ -19,7 +19,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
-import com.aiwa.bridge.BackendOutdatedException
 import com.aiwa.bridge.LocalClaudeBridge
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -182,25 +181,6 @@ if(backendStatus==null){
 AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois.")}
 }else if(versionNow<EXPECTED_BACKEND_VERSION){
 AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend obsolète (version $versionNow, il faut $EXPECTED_BACKEND_VERSION) et mise à jour automatique impossible. Dans Termux : cd ~/aiwa_widget && git pull && pkill -f aiwa_server.py, puis rouvre Aiwa.")}
-}
-}
-// Reported live: "je veux ce contenu dans l'appli" — resuming a session
-// showed nothing of what was said in it. Keyed on the session id (and
-// the backend version, so it retries once an outdated backend has been
-// updated): whenever the current session changes — picked here, picked
-// from the widget, or created by a first message — load its real
-// transcript from disk. Skipped mid-request so it can't clobber a
-// streaming reply. The widget deliberately never shows this.
-LaunchedEffect(state.sessionId,state.backendVersion){
-val id=state.sessionId
-if(id!=null&&AiwaRepository.state.value.status!=AiwaState.Status.WORKING){
-try{
-val history=bridge.fetchHistory(id)
-AiwaRepository.update{if(it.sessionId==id)it.copy(output=history?:"") else it}
-}catch(err:Exception){
-val message=when(err){is BackendOutdatedException->err.message?:"Backend obsolète";else->"[historique indisponible : ${err.message}]"}
-AiwaRepository.update{if(it.sessionId==id)it.copy(output=message) else it}
-}
 }
 }
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
