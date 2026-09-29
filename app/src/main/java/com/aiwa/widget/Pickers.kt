@@ -229,7 +229,8 @@ class RepoPickerActivity : ComponentActivity() {
     }
 }
 
-// Where the user connects GitHub to the Claude account (starts the connection),
-// and the list of connectors, where GitHub can be disconnected.
-private const val CLAUDE_CONNECT_GITHUB_URL = "https://claude.ai/customize/connectors?auth_start=github&auth_start_force=1"
+// Where the user connects GitHub to the Claude account (and installs the Claude
+// GitHub App on a repository), and the list of connectors, where GitHub can be
+// disconnected.
+private const val CLAUDE_CONNECT_GITHUB_URL = "https://claude.ai/connect-github"
 private const val CLAUDE_CONNECTORS_URL = "https://claude.ai/customize/connectors"

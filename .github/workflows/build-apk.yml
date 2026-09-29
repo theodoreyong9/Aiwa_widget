@@ -5,6 +5,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+# One build publishes at a time: the release below is deleted and recreated.
+concurrency:
+  group: build-apk
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,15 +26,19 @@ jobs:
         with:
           name: aiwa-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
-      - name: Publish the built APK to the repo root
+      # The APK is no longer committed to the repository (47 commits of 11 MB made
+      # about 490 MB of history). It is one file of ONE rolling release, tagged
+      # android-latest, recreated at each build so that the tag follows the commit
+      # that was built and the address never changes:
+      # https://github.com/<owner>/<repo>/releases/download/android-latest/<repo>.apk
+      - name: Publish the APK to the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk aiwa-debug.apk
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f aiwa-debug.apk
-          if git diff --cached --quiet; then
-            echo "APK unchanged, nothing to commit"
-          else
-            git commit -m "Update built debug APK [skip ci]"
-            git push
-          fi
+          APK="${GITHUB_REPOSITORY#*/}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          gh release delete android-latest --cleanup-tag --yes || true
+          gh release create android-latest "$APK" \
+            --target "$GITHUB_SHA" \
+            --title "Debug APK (latest build)" \
+            --notes "Debug build of ${GITHUB_SHA}. Signed with the fixed debug key, so it installs over the previous one."

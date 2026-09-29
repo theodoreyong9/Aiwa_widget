@@ -48,12 +48,14 @@ fi
 # install unattended.
 echo "== Downloading the latest Aiwa APK =="
 APK_PATH="$HOME/aiwa-debug.apk"
-if curl -fsSL -o "$APK_PATH" https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/aiwa-debug.apk; then
+# The APK is a file of the rolling GitHub release (the committed copy is the fallback for older builds).
+if curl -fsSL -o "$APK_PATH" https://github.com/theodoreyong9/Aiwa_widget/releases/download/android-latest/Aiwa_widget.apk \
+  || curl -fsSL -o "$APK_PATH" https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/aiwa-debug.apk; then
   pkg install -y termux-api >/dev/null 2>&1 || true
   echo "== Opening the Android installer — tap Install/Update when it appears =="
   termux-open "$APK_PATH" || echo "Could not open the installer automatically (install the Termux:API app for this to work) — open $APK_PATH by hand from a file manager instead."
 else
-  echo "Could not download the APK (network issue?) — skipping. You can install it by hand later from https://github.com/theodoreyong9/aiwa_widget/raw/main/aiwa-debug.apk"
+  echo "Could not download the APK (network issue?) — skipping. You can install it by hand later from https://github.com/theodoreyong9/Aiwa_widget/releases/download/android-latest/Aiwa_widget.apk"
 fi
 
 exec bash "$REPO_DIR/backend/setup-termux-proot.sh"
