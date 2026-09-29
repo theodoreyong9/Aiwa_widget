@@ -4,7 +4,6 @@ import android.content.Intent
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
 import androidx.glance.appwidget.action.ActionCallback
-import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.LocalClaudeBridge
 
 val SessionIdKey = ActionParameters.Key<String>("sessionId")
@@ -39,24 +38,29 @@ class OpenSessionInTermuxAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val sessionId = parameters[SessionIdKey]?.takeIf { it.isNotBlank() }
         val preview = parameters[SessionPreviewKey] ?: "nouvelle"
+        val bridge = LocalClaudeBridge()
         try {
-            LocalClaudeBridge().selectSession(sessionId)
+            bridge.selectSession(sessionId)
             // Reported live: "le bouton nouvelle session ne marche pas"
             // — it actually did work (current_session correctly cleared
             // server-side), but nothing on screen ever confirmed the
             // tap did anything, since clearing the active session means
             // no list row shows the "●" marker anymore either. A real,
             // visible confirmation instead of silence.
-            // output is cleared on ANY switch (not just "new"): it now
-            // accumulates a real transcript across turns (sendAndTrack),
-            // so leftover text from a DIFFERENT conversation would
-            // otherwise bleed into whichever one is opened next.
+            // Reported live separately: "ni dans le widget ni dans
+            // l'application il n'y a la récupération du contenu de la
+            // conversation" — resuming a REAL session used to just clear
+            // output to "", showing nothing until a new turn was sent.
+            // Loading its actual past transcript here means resuming an
+            // old conversation now shows what was actually said in it.
+            val output = if (sessionId == null) {
+                "Nouvelle conversation prête — touche le micro."
+            } else {
+                (try { bridge.fetchHistory(sessionId) } catch (err: Exception) { null })
+                    ?: "Session reprise — touche le micro pour continuer."
+            }
             AiwaRepository.update {
-                it.copy(
-                    session = preview.take(30),
-                    sessionId = sessionId,
-                    output = if (sessionId == null) "Nouvelle conversation prête — touche le micro." else "",
-                )
+                it.copy(session = preview.take(30), sessionId = sessionId, output = output)
             }
         } catch (err: Exception) {
             // Reported live via a widget screenshot: "les boutons session
@@ -83,6 +87,14 @@ class OpenSessionInTermuxAction : ActionCallback {
                 AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = "Impossible d'ouvrir Termux : ${err.message}") }
             }
         }
-        AiwaWidget().updateAll(context)
+        // Reported live: "la synchronisation n'est pas top" — updateAll()
+        // (every instance) reliably worked elsewhere (refreshWidget()
+        // after a send), but here the known-working ToggleSessionsAction
+        // uses .update(context, glanceId) on this SPECIFIC tapped
+        // instance instead — using the same targeted call here too,
+        // alongside provideGlance no longer writing session state back
+        // into the shared AiwaRepository singleton (see AiwaWidget.kt),
+        // removes the race that could leave a stale header on screen.
+        AiwaWidget().update(context, glanceId)
     }
 }

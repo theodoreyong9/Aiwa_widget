@@ -188,7 +188,16 @@ for(s in sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false
 scope.launch{
-try{bridge.selectSession(s.id);AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id,output="")}}
+// Reported live: "ni dans le widget ni dans l'application il n'y a
+// la récupération du contenu de la conversation" — resuming a REAL
+// session used to just clear output to "", showing nothing until a
+// new turn was sent. Loading its actual past transcript means
+// resuming an old conversation now shows what was actually said.
+try{
+bridge.selectSession(s.id)
+val history=try{bridge.fetchHistory(s.id)}catch(err:Exception){null}
+AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id,output=history?:"Session reprise — envoie un message pour continuer.")}
+}
 catch(err:Exception){reportError(err)}
 }
 })

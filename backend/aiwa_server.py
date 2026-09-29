@@ -28,6 +28,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 
 def _ts():
@@ -115,6 +116,53 @@ def list_real_sessions(limit=20):
     for e in entries:
         del e["mtime"]
     return entries[:limit]
+
+
+def _extract_text(content):
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+        return "".join(parts).strip()
+    return ""
+
+
+def read_session_transcript(session_id):
+    """The FULL past conversation for one session — the same transcript
+    file list_real_sessions() peeks at for a one-line preview, but
+    walking every user/assistant turn instead of stopping at the first
+    one. Reported live: "ni dans le widget ni dans l'application il n'y
+    a la récupération du contenu de la conversation" — resuming an
+    existing session only ever showed turns sent AFTER switching to it;
+    the actual past conversation was never loaded at all. Same HONEST
+    LIMIT as list_real_sessions() on the on-disk layout this reads."""
+    projects_dir = Path.home() / ".claude" / "projects"
+    if not projects_dir.is_dir():
+        return None
+    # Filtering by exact filename stem, rather than interpolating
+    # session_id (an HTTP query param) straight into a glob pattern,
+    # avoids that pattern ever being able to escape projects_dir via a
+    # crafted "../" value — moot today since this only binds to
+    # 127.0.0.1, but cheap to get right regardless.
+    match = next((p for p in projects_dir.glob("*/*.jsonl") if p.stem == session_id), None)
+    if match is None:
+        return None
+    turns = []
+    with match.open("r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            message = record.get("message") or {}
+            role = message.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            text = _extract_text(message.get("content"))
+            if not text:
+                continue
+            turns.append(("🧑" if role == "user" else "🤖") + " " + text)
+    return "\n\n".join(turns)
 
 
 def _kill_process(proc):
@@ -266,6 +314,10 @@ class Handler(BaseHTTPRequestHandler):
             self.reply_json({"session": session, "status": status})
         elif self.path == "/api/sessions":
             self.reply_json(list_real_sessions())
+        elif self.path.startswith("/api/history"):
+            session_id = parse_qs(urlparse(self.path).query).get("session", [None])[0]
+            transcript = read_session_transcript(session_id) if session_id else None
+            self.reply_json({"transcript": transcript})
         else:
             self.send_error(404)
 

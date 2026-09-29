@@ -136,4 +136,19 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         val status = JSONObject(getText("/api/status"))
         if (status.isNull("session")) null else status.optString("session").ifEmpty { null }
     }
+
+    /**
+     * Reported live: "ni dans le widget ni dans l'application il n'y a
+     * la récupération du contenu de la conversation" — resuming an
+     * existing session only ever showed NEW turns sent after switching
+     * to it; the actual past conversation was never loaded. This reads
+     * the real transcript straight off the session's own .jsonl file
+     * (see aiwa_server.py's read_session_transcript), same on-disk
+     * format list_sessions() already peeks at for a one-line preview.
+     */
+    override suspend fun fetchHistory(sessionId: String): String? = withContext(Dispatchers.IO) {
+        val encoded = java.net.URLEncoder.encode(sessionId, "UTF-8")
+        val response = JSONObject(getText("/api/history?session=$encoded"))
+        if (response.isNull("transcript")) null else response.optString("transcript").ifEmpty { null }
+    }
 }
