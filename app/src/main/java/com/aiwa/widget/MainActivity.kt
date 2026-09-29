@@ -19,9 +19,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
+import com.aiwa.bridge.BackendOutdatedException
+import com.aiwa.bridge.BusyException
 import com.aiwa.bridge.LocalClaudeBridge
-import com.aiwa.bridge.SessionInfo
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+// One forced backend restart per app process at most: if the checkout
+// can't be updated (no network), restarting again would only throw away
+// the warm claude process every time for nothing.
+private var restartedOutdatedBackend=false
 class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{MaterialTheme{AiwaScreen()}}}}
 // "Travail…" alone left every message looking stuck for the first
 // 20-30s (claude's real, confirmed cold-start delay before its first
@@ -33,7 +39,6 @@ val bridge=remember{LocalClaudeBridge()}
 val scope=rememberCoroutineScope()
 val state by AiwaRepository.state.collectAsState()
 var input by remember{mutableStateOf("")}
-var sessions by remember{mutableStateOf(listOf<SessionInfo>())}
 var sessionMenuExpanded by remember{mutableStateOf(false)}
 fun refreshWidget(){scope.launch{AiwaWidget().updateAll(context)}}
 fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output=it.output+"\n[erreur: ${err.message}]")}}
@@ -107,7 +112,10 @@ AiwaRepository.update{
 // own coroutine below); this only ever reports acceptance, so it
 // keeps status READY and lets the user just try sending — a
 // connection error there is the real, honest signal either way.
-if(result.isSuccess)it.copy(status=AiwaState.Status.READY,output="Termux démarré en arrière-plan — laisse-lui quelques secondes puis essaie d'envoyer un message.")
+// No "Termux démarré…" message on success any more: it overwrote
+// the transcript (and the history just loaded) on every app open,
+// and the user asked for no informational messages.
+if(result.isSuccess)it.copy(status=AiwaState.Status.READY)
 else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
 }
 refreshWidget()
@@ -151,57 +159,89 @@ startTermuxBackend()
 // need a cold start after the process has been idle a while. Starting
 // it here means it's running from the first time the app is opened,
 // same bootstrap spot as the Termux auto-start above.
-ContextCompat.startForegroundService(context,Intent(context,KeepAliveService::class.java))
-// Reported live: "parfois dans le widget et l'appli c'est pas la même
-// session. C'est mal connecté" — see AiwaWidget.kt's own copy of this
-// same resync for the full explanation (AiwaRepository's in-memory
-// state can drift after an independent process restart); doing it here
-// too on every app open means the app converges on the backend's real
-// current session instead of showing a stale local guess.
+try{ContextCompat.startForegroundService(context,Intent(context,KeepAliveService::class.java))}catch(err:Exception){}
+// Reported live: features silently missing because the backend
+// running on the phone was older than this app (history never
+// loaded — it predated /api/history). The backend reports its
+// version. startAiwaBackendViaTermux above already pulls and restarts
+// it when the checkout changed, so an old version seen right away may
+// just be that restart still pending: wait, look again, and only then
+// force one restart (at most once per process).
+var backendStatus=awaitBackendStatus(bridge,30_000)
+if(backendStatus!=null&&backendStatus.version<EXPECTED_BACKEND_VERSION){
+delay(10_000)
+backendStatus=awaitBackendStatus(bridge,30_000)
+if(backendStatus!=null&&backendStatus.version<EXPECTED_BACKEND_VERSION&&!restartedOutdatedBackend){
+restartedOutdatedBackend=true
+startAiwaBackendViaTermux(context,forceRestart=true)
+delay(5000)
+awaitBackendStatus(bridge,30_000)
+}
+}
+BackendSync.refresh(bridge)
+val versionNow=AiwaRepository.state.value.backendVersion
+if(backendStatus==null){
+AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois.")}
+}else if(versionNow<EXPECTED_BACKEND_VERSION){
+AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend obsolète (version $versionNow, il faut $EXPECTED_BACKEND_VERSION) et mise à jour automatique impossible. Dans Termux : cd ~/aiwa_widget && git pull && pkill -f aiwa_server.py, puis rouvre Aiwa.")}
+}
+}
+// Reported live: "je veux ce contenu dans l'appli" — resuming a session
+// showed nothing of what was said in it. Keyed on the session id (and
+// the backend version, so it retries once an outdated backend has been
+// updated): whenever the current session changes — picked here, picked
+// from the widget, or created by a first message — load its real
+// transcript from disk. Skipped mid-request so it can't clobber a
+// streaming reply. The widget deliberately never shows this.
+LaunchedEffect(state.sessionId,state.backendVersion){
+val id=state.sessionId
+if(id!=null&&AiwaRepository.state.value.status!=AiwaState.Status.WORKING){
 try{
-val realSessionId=bridge.currentSessionId()
-val sessionsNow=try{bridge.listSessions()}catch(err:Exception){emptyList()}
-val preview=sessionsNow.find{it.id==realSessionId}?.preview?.take(8)?:realSessionId?.take(8)?:"aucune session"
-AiwaRepository.update{it.copy(session=preview,sessionId=realSessionId)}
-}catch(err:Exception){/* backend not reachable yet — startTermuxBackend() above already handles that */}
+val history=bridge.fetchHistory(id)
+AiwaRepository.update{if(it.sessionId==id)it.copy(output=history?:"") else it}
+}catch(err:Exception){
+val message=when(err){is BackendOutdatedException->err.message?:"Backend obsolète";else->"[historique indisponible : ${err.message}]"}
+AiwaRepository.update{if(it.sessionId==id)it.copy(output=message) else it}
+}
+}
 }
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
 Text("AIWA",style=MaterialTheme.typography.headlineMedium)
 Box{
 Text("Session : ${state.session}",modifier=Modifier.clickable{
 scope.launch{
-try{sessions=bridge.listSessions();sessionMenuExpanded=true}
+try{BackendSync.refresh(bridge);sessionMenuExpanded=true}
 catch(err:Exception){reportError(err)}
 }
 })
 DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=false}){
+// Both entries only ask the backend to switch and then re-read the
+// backend's real state (BackendSync) — never a local guess. The
+// history of a picked session is loaded by the effect above once
+// the session id actually changes.
 DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
 scope.launch{
-// Reported live: "je ne vois pas le texte total de la session" led
-// to output accumulating a real transcript instead of being wiped
-// per message — but switching to a genuinely DIFFERENT conversation
-// should still start that transcript fresh, or old text bleeds into
-// a session it was never part of.
-try{bridge.selectSession(null);AiwaRepository.update{it.copy(session="nouvelle",sessionId=null,output="")}}
+try{
+bridge.selectSession(null)
+AiwaRepository.update{if(it.sessionId==null)it else it.copy(output="",lastReply="")}
+}catch(err:BusyException){}
 catch(err:Exception){reportError(err)}
+BackendSync.refresh(bridge)
+refreshWidget()
 }
 })
-for(s in sessions){
+for(s in state.sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false
 scope.launch{
-// Reported live: "ni dans le widget ni dans l'application il n'y a
-// la récupération du contenu de la conversation" — resuming a REAL
-// session used to just clear output to "", showing nothing until a
-// new turn was sent. Loading its actual past transcript means
-// resuming an old conversation now shows what was actually said.
 try{
 bridge.selectSession(s.id)
-val history=try{bridge.fetchHistory(s.id)}catch(err:Exception){null}
-AiwaRepository.update{it.copy(session=s.preview,sessionId=s.id,output=history?:"Session reprise — envoie un message pour continuer.")}
-}
+AiwaRepository.update{if(it.sessionId==s.id)it else it.copy(output="",lastReply="")}
+}catch(err:BusyException){}
 catch(err:Exception){reportError(err)}
+BackendSync.refresh(bridge)
+refreshWidget()
 }
 })
 }

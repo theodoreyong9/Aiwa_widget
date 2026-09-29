@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- minHeight bumped from the original 72dp (a slim single-row size) —
-     the widget now has a real scrollable response area that needs
-     actual vertical room to be useful at all; still resizable
-     (resizeMode) if the user wants it smaller or bigger. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="180dp" android:minHeight="220dp" android:minResizeWidth="140dp" android:minResizeHeight="120dp" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />
+<!-- Compact by request: the controls are ONE row (session / mic / model),
+     resizable down to a single row. The default is two rows because a
+     widget cannot draw an overlay dropdown — an opened list (sessions or
+     models) needs the space under the row to be visible at all. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="110dp" android:minResizeWidth="180dp" android:minResizeHeight="40dp" android:targetCellWidth="4" android:targetCellHeight="2" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:widgetCategory="home_screen" />

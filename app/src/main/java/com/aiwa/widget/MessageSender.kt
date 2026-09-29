@@ -1,17 +1,14 @@
 package com.aiwa.widget
 import android.content.Context
+import com.aiwa.bridge.BackendOutdatedException
 import com.aiwa.bridge.BusyException
 import com.aiwa.bridge.ClaudeBridge
 
 /**
  * The one real send path — shared by MainActivity's "Envoyer"/mic and
  * DictateActivity's own mic, instead of each duplicating the same
- * coroutine. Reported live as the actual cause of a real bug: the
- * widget's mic (DictateActivity) had its own copy of this logic that
- * never fetched/stored the real session id, so the app kept showing
- * the "Aiwa" placeholder forever whenever a message was sent via the
- * widget instead of the app. One shared function means that kind of
- * drift can't happen again.
+ * coroutine (a duplicated copy once drifted and never captured the real
+ * session id).
  */
 suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
     if (text.isBlank()) return
@@ -20,48 +17,41 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
         bridge.sendMessage(text).collect { chunk ->
             if (!started) {
                 started = true
-                // Reported live: this used to reset state UNCONDITIONALLY
-                // before even attempting the send — so a busy-rejected
-                // attempt (a real request from elsewhere already in
-                // flight) still wiped whatever that real request was
-                // showing, with nothing to restore it until that request
-                // finished — surfacing as "the response is for the
-                // wrong/previous input". The bridge now only emits at all
-                // once the POST is actually accepted (see
-                // LocalClaudeBridge's own comment on this), so reaching
-                // here means this specific send is real — safe to reset.
-                // Appends rather than replaces: reported live as
-                // "je ne vois pas le texte total de la session" — the
-                // whole point of the scrollable areas (app + widget) is
-                // a real transcript, not just the latest reply.
-                AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, output = it.output + "\n\n🧑 $text\n🤖 ") }
+                // The bridge only emits once the POST is actually
+                // accepted, so reaching here means this send is real —
+                // a busy-rejected attempt never touches any state (it
+                // used to wipe the display of the request really in
+                // flight, showing "the reply to the previous message").
+                // Same layout as the backend's /api/history so the app
+                // can swap in the on-disk transcript without a visible jump.
+                AiwaRepository.update {
+                    val separator = if (it.output.isBlank()) "" else "\n\n"
+                    it.copy(
+                        status = AiwaState.Status.WORKING,
+                        output = it.output + separator + "🧑 $text\n\n🤖 ",
+                        lastReply = "",
+                    )
+                }
             } else if (chunk.isNotEmpty()) {
-                AiwaRepository.update { it.copy(output = it.output + chunk) }
+                AiwaRepository.update { it.copy(output = it.output + chunk, lastReply = it.lastReply + chunk) }
             }
         }
-        val realSessionId = try { bridge.currentSessionId() } catch (err: Exception) { null }
-        AiwaRepository.update {
-            it.copy(
-                status = AiwaState.Status.DONE,
-                session = realSessionId?.take(8) ?: it.session,
-                sessionId = realSessionId ?: it.sessionId,
-            )
-        }
+        // DONE first, then sync: BackendSync may reveal a brand-new
+        // session id, and the app only reloads history for a session
+        // that is not mid-request.
+        AiwaRepository.update { it.copy(status = AiwaState.Status.DONE) }
+        BackendSync.refresh(bridge)
     } catch (err: BusyException) {
-        // Reported live and confirmed via server-side tracing: this is
-        // NOT a failure — claude takes ~20-30s before its first token,
-        // and an impatient extra send during that silent wait
-        // correctly gets this back (a real request IS in flight).
-        // Nothing was ever reset above (see the `started` guard), so
-        // there is genuinely nothing to undo here.
+        // Not a failure: a real request is already in flight, and
+        // nothing was reset above (see the `started` guard).
     } catch (err: Exception) {
-        // Reported live via a widget screenshot: sending from the widget's
-        // mic (or a session tap) before the app was ever opened once fails
-        // with "Backend not reachable" — MainActivity's own auto-start
-        // never gets a chance to run in that case. Firing it here too
-        // means the NEXT attempt has a real shot at working, instead of
-        // failing the same way forever until the user opens the app.
-        val message = if (isBackendUnreachable(err)) autoStartBackendMessage(context) else "[erreur: ${err.message}]"
-        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n" + message) }
+        // A widget-only user never opens the app, so the backend's
+        // auto-start there never runs — trigger it from here too.
+        val message = when {
+            isBackendUnreachable(err) -> autoStartBackendMessage(context)
+            err is BackendOutdatedException -> err.message ?: "Backend obsolète"
+            else -> "[erreur: ${err.message}]"
+        }
+        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n" + message, lastReply = message) }
     }
 }

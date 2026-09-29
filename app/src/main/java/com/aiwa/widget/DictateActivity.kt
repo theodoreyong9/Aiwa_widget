@@ -1,5 +1,6 @@
 package com.aiwa.widget
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -52,6 +53,14 @@ class DictateActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A visible activity may always start a foreground service: using
+        // the widget's mic once is enough to keep the process warm from
+        // then on, even if the app itself was never opened.
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, KeepAliveService::class.java))
+        } catch (err: Exception) {
+            // Not fatal: dictation itself doesn't depend on it.
+        }
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         if (granted) startListening() else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }

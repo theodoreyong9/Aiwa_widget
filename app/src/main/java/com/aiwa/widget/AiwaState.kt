@@ -1,38 +1,54 @@
 package com.aiwa.widget
 
+import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
+// Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
+// the app starts relying on a new backend feature.
+const val EXPECTED_BACKEND_VERSION = 2
+
+data class ModelChoice(val id: String?, val label: String)
+
+// null id = don't pass --model at all (the CLI's own default). The
+// aliases resolve to the latest model of that family inside the CLI;
+// Fable is given by full id since its alias may not exist in an older CLI.
+val MODEL_CHOICES = listOf(
+    ModelChoice(null, "Auto"),
+    ModelChoice("claude-fable-5-1", "Fable"),
+    ModelChoice("opus", "Opus"),
+    ModelChoice("sonnet", "Sonnet"),
+    ModelChoice("haiku", "Haiku"),
+)
+
+fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label ?: id ?: "Auto"
+
 data class AiwaState(
-    // Reported live: the app showed the literal placeholder "Aiwa"
-    // while the widget showed "aucune session" for the exact same real
-    // state (no session established yet) — two different-looking
-    // placeholders for one meaning was confusing ("aucun des deux
-    // n'est bon"). One consistent default fixes both call sites at
-    // once.
-    val session: String = "aucune session",
-    // The real, full backend session id — `session` above is only ever
-    // a short display label (truncated to 8 chars once a real id is
-    // known). Reported live: opening a session directly in Termux
-    // needs the REAL id for `claude --resume`, not the truncated
-    // label, so this is tracked separately instead of re-deriving it.
+    // Display name of the current session, derived by BackendSync from
+    // the backend's real answer — never guessed locally.
+    val session: String = "Nouvelle session",
+    // The real, full backend session id (`session` above is only a label).
     val sessionId: String? = null,
+    val model: String? = null,
+    val sessions: List<SessionInfo> = emptyList(),
+    val backendVersion: Int = 0,
     val status: Status = Status.READY,
+    // The full transcript — shown in the app only.
     val output: String = "",
+    // Only the latest reply (or error) — what the compact widget shows.
+    val lastReply: String = "",
     val question: String? = null,
 ) {
     enum class Status { READY, WORKING, WAITING, DONE, ERROR }
 }
 
 /**
- * The one real, process-wide source of truth MainActivity's own Compose
- * UI and the home-screen widget both read from. They run in the same
- * process (no android:process override in the manifest) but are
- * otherwise unconnected — Glance only re-renders when explicitly told
- * to via AiwaWidget().updateAll(context), never just because some
- * unrelated Compose state changed elsewhere in the process. Every real
- * mutation here is meant to be followed by a real updateAll() call —
- * see MainActivity's own use of this for the pattern.
+ * The one process-wide source of truth both the app's Compose UI and the
+ * widget read. The widget observes it reactively (collectAsState inside
+ * its composition) — it must NOT capture a snapshot in provideGlance:
+ * Glance keeps a composition alive for a while and answers updateAll()
+ * by recomposing that same composition, so a captured snapshot stays
+ * stale (reported live as the widget header not following the app).
  */
 object AiwaRepository {
     private val _state = MutableStateFlow(AiwaState())

@@ -23,6 +23,12 @@ private const val POLL_TIMEOUT_MS = 5 * 60_000L
  * storm while that original request is quietly still working. */
 class BusyException(message: String) : Exception(message)
 
+/** The backend answered 404: it is running an older version than this
+ * app expects (reported live: the backend on the phone predated
+ * /api/history, so history silently never loaded). Distinct from
+ * "not reachable" so callers can say what to actually do. */
+class BackendOutdatedException(message: String) : Exception(message)
+
 class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") : ClaudeBridge {
 
     // A raw ConnectException's own message ("Failed to connect to
@@ -38,6 +44,10 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         throw IllegalStateException(
             "Backend not reachable at $baseUrl — it isn't started. Run `python3 backend/aiwa_server.py` on THIS device first (see README's \"Running this for real\").",
             err,
+        )
+    } catch (err: java.io.FileNotFoundException) {
+        throw BackendOutdatedException(
+            "Backend obsolète : il ne connaît pas cette fonction. Dans Termux : cd ~/aiwa_widget && git pull, puis rouvre Aiwa.",
         )
     }
 
@@ -127,9 +137,31 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         }
     }
 
+    // The backend answers {"accepted": false, ...} for a switch it
+    // refuses (a message is in flight, malformed value). Ignoring that
+    // used to make callers believe a switch happened when it hadn't.
+    private fun requireAccepted(raw: String) {
+        if (raw.contains("\"accepted\": false") || raw.contains("\"accepted\":false")) {
+            if (raw.contains("busy")) throw BusyException("backend busy: $raw")
+            throw IllegalStateException("backend refused: $raw")
+        }
+    }
+
     override suspend fun selectSession(id: String?) = withContext(Dispatchers.IO) {
-        postText("/api/session", id ?: "")
-        Unit
+        requireAccepted(postText("/api/session", id ?: ""))
+    }
+
+    override suspend fun selectModel(id: String?) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/model", id ?: ""))
+    }
+
+    override suspend fun status(): BackendStatus = withContext(Dispatchers.IO) {
+        val json = JSONObject(getText("/api/status"))
+        BackendStatus(
+            session = if (json.isNull("session")) null else json.optString("session").ifEmpty { null },
+            model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
+            version = json.optInt("version", 0),
+        )
     }
 
     override suspend fun currentSessionId(): String? = withContext(Dispatchers.IO) {

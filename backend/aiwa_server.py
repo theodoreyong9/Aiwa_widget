@@ -23,6 +23,7 @@ stdin right after the one message used to do) was unverified — this
 file is the actual test of that assumption, not a guarantee.
 """
 import json
+import re
 import subprocess
 import threading
 import time
@@ -37,6 +38,19 @@ def _ts():
 
 HOST = "127.0.0.1"
 PORT = 8787
+# Bumped whenever the app starts depending on a new backend feature. The
+# app compares this (reported via /api/status) against the version it
+# expects, so a stale checkout/running server is detected and fixed
+# instead of silently missing routes (reported live: history never
+# loaded because the backend running on the phone predated /api/history).
+BACKEND_VERSION = 2
+# Longest transcript /api/history will send back — sessions can be
+# megabytes; only the most recent part is useful in a phone UI.
+MAX_HISTORY_CHARS = 40000
+# Values passed to `claude --model`. Restrictive on purpose: it ends up
+# as a command-line argument, and must never look like another flag.
+SESSION_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
+MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
 # How long a single turn gets before this backend gives up on it and
 # kills the underlying process. This is a safety net against a turn
 # hanging with no output at all — without it, `busy` could stay stuck
@@ -53,6 +67,9 @@ busy = False
 # list_real_sessions below) or from the session_id a fresh run's own
 # real "result" event reports back — never invented.
 current_session = None
+# None means "the CLI's own default model" — otherwise an alias or model
+# id passed as `claude --model <value>` whenever a process is started.
+current_model = None
 # The one persistent claude process, or None if none is currently
 # running (nothing sent yet, it crashed, or a session switch killed it
 # deliberately — see /api/session below). Guarded by process_lock
@@ -162,7 +179,10 @@ def read_session_transcript(session_id):
             if not text:
                 continue
             turns.append(("🧑" if role == "user" else "🤖") + " " + text)
-    return "\n\n".join(turns)
+    transcript = "\n\n".join(turns)
+    if len(transcript) > MAX_HISTORY_CHARS:
+        transcript = "…" + transcript[-MAX_HISTORY_CHARS:]
+    return transcript
 
 
 def _kill_process(proc):
@@ -173,10 +193,12 @@ def _kill_process(proc):
         print(f"[{_ts()}] _kill_process: ignoring {err!r} while killing pid={proc.pid}", flush=True)
 
 
-def _start_process(session):
+def _start_process(session, model):
     command = ["claude", "-p"]
     if session:
         command += ["--resume", session]
+    if model:
+        command += ["--model", model]
     command += ["--input-format", "stream-json", "--output-format", "stream-json",
                 "--include-partial-messages", "--verbose"]
     print(f"[{_ts()}] _start_process: {command}", flush=True)
@@ -247,6 +269,20 @@ def _reader_loop(proc):
                 emit({"type": "error", "message": f"claude exited unexpectedly (code {returncode}) mid-turn"})
 
 
+def _drop_process_and_rewarm(reason):
+    """The live process belongs to the previous session/model, so it has
+    to go — and starting the replacement right away (instead of lazily on
+    the next message) means the ~20-30s cold start overlaps with the user
+    doing something else, rather than landing on their next message."""
+    global process
+    with process_lock:
+        if process is not None:
+            print(f"[{_ts()}] {reason}: killing pid={process.pid}", flush=True)
+            _kill_process(process)
+            process = None
+    threading.Thread(target=_ensure_process, daemon=True).start()
+
+
 def _ensure_process():
     """Returns a live persistent process, starting one if needed."""
     global process
@@ -255,7 +291,8 @@ def _ensure_process():
             return process
         with lock:
             session = current_session
-        process = _start_process(session)
+            model = current_model
+        process = _start_process(session, model)
         threading.Thread(target=_reader_loop, args=(process,), daemon=True).start()
         return process
 
@@ -311,7 +348,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 status = "busy" if busy else "ready"
                 session = current_session
-            self.reply_json({"session": session, "status": status})
+                model = current_model
+            self.reply_json({"session": session, "status": status, "model": model, "version": BACKEND_VERSION})
         elif self.path == "/api/sessions":
             self.reply_json(list_real_sessions())
         elif self.path.startswith("/api/history"):
@@ -322,7 +360,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global busy, current_session, process
+        global busy, current_session, current_model, process
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -345,17 +383,29 @@ class Handler(BaseHTTPRequestHandler):
             # persistent process (if any) belongs to the OLD session's
             # context, so it has to go — the next message starts a
             # fresh one, --resume-ing the newly picked session if any.
+            requested_session = body.strip()
+            if requested_session and not SESSION_RE.fullmatch(requested_session):
+                self.reply_json({"accepted": False, "reason": "invalid session id"})
+                return
             with lock:
                 if busy:
                     self.reply_json({"accepted": False, "reason": "busy"})
                     return
-                current_session = body.strip() or None
-            with process_lock:
-                if process is not None:
-                    print(f"[{_ts()}] /api/session: killing pid={process.pid} — session switched to {current_session!r}", flush=True)
-                    _kill_process(process)
-                    process = None
+                current_session = requested_session or None
+            _drop_process_and_rewarm(f"/api/session -> {current_session!r}")
             self.reply_json({"accepted": True, "session": current_session})
+        elif self.path == "/api/model":
+            requested = body.strip()
+            if requested and not MODEL_RE.fullmatch(requested):
+                self.reply_json({"accepted": False, "reason": "invalid model"})
+                return
+            with lock:
+                if busy:
+                    self.reply_json({"accepted": False, "reason": "busy"})
+                    return
+                current_model = requested or None
+            _drop_process_and_rewarm(f"/api/model -> {current_model!r}")
+            self.reply_json({"accepted": True, "model": current_model})
         elif self.path == "/api/background":
             self.reply_json({"accepted": False, "reason": "not wired yet"})
         else:
