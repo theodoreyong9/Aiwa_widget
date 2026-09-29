@@ -34,7 +34,9 @@ private const val NOTIFICATION_ID = 1
  *
  * One small job since: every few seconds it asks the local backend for its
  * state and redraws the widget when something the widget shows has changed
- * (Claude waiting for an answer, the site going live, the current session).
+ * (Claude waiting for an answer, the site going live, the current session,
+ * the backend going down or starting). It also restarts the backend, through
+ * Termux, when it finds it down.
  * Without it the widget only ever refreshed when it was tapped.
  */
 class KeepAliveService : Service() {
@@ -68,9 +70,16 @@ class KeepAliveService : Service() {
     private suspend fun pollBackend() {
         val bridge = LocalClaudeBridge()
         var shown = widgetKey()
+        var lastLaunch = 0L
         while (true) {
             try {
                 BackendSync.refresh(bridge)
+                // Down: bring it back on its own (at most every 90 s), so it is
+                // usually up already when you tap — a cold start takes a while.
+                if (AiwaRepository.state.value.backend == "down" && System.currentTimeMillis() - lastLaunch > 90_000) {
+                    lastLaunch = System.currentTimeMillis()
+                    startAiwaBackendViaTermux(applicationContext)
+                }
                 val now = widgetKey()
                 if (now != shown) {
                     shown = now
@@ -85,7 +94,7 @@ class KeepAliveService : Service() {
 
     private fun widgetKey(): List<Any?> {
         val state = AiwaRepository.state.value
-        return listOf(state.waiting, state.ciFresh, state.ciState, state.siteState, state.cloudSessionId, state.repo, state.model, state.pushMain, state.autodeploy)
+        return listOf(state.backend, state.waiting, state.ciFresh, state.ciState, state.siteState, state.cloudSessionId, state.repo, state.model, state.pushMain, state.autodeploy)
     }
 
     override fun onDestroy() {

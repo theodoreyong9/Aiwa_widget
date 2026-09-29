@@ -1,12 +1,16 @@
 package com.aiwa.widget
 
+import android.content.Context
+import android.content.SharedPreferences
 import com.aiwa.bridge.CloudSessionInfo
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 12
+const val EXPECTED_BACKEND_VERSION = 13
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -82,6 +86,10 @@ data class AiwaState(
     // A new green run the user has not been told about: there is something to look at.
     val ciFresh: Boolean = false,
     val githubError: String? = null,
+    // Whether the local backend answers: "unknown" (not asked yet), "up", "down",
+    // or "starting" (Termux was asked to start it, since backendStartedAt).
+    val backend: String = "unknown",
+    val backendStartedAt: Long = 0L,
     val status: Status = Status.READY,
     // The last problem worth telling the user about, shown in the app only
     // (the widget has no message area: its errors are toasts). There is no
@@ -104,8 +112,71 @@ data class AiwaState(
 object AiwaRepository {
     private val _state = MutableStateFlow(AiwaState())
     val state: StateFlow<AiwaState> = _state
+    private var prefs: SharedPreferences? = null
 
     fun update(transform: (AiwaState) -> AiwaState) {
         _state.value = transform(_state.value)
+    }
+
+    fun markBackendStarting() {
+        update { it.copy(backend = "starting", backendStartedAt = System.currentTimeMillis()) }
+    }
+
+    /**
+     * The last thing the backend told us, restored when the process starts
+     * (AiwaApp). Reported live: with the backend down or slow to start, a
+     * freshly started process knew nothing — no session, no repository — so
+     * the widget lost its "Claude ↗" button until the backend answered.
+     * The backend stays the source of truth: the first refresh overwrites this.
+     */
+    fun restore(context: Context) {
+        if (prefs != null) return
+        val store = context.applicationContext.getSharedPreferences("aiwa_state", Context.MODE_PRIVATE)
+        prefs = store
+        val raw = store.getString("snapshot", null) ?: return
+        try {
+            val json = JSONObject(raw)
+            fun text(key: String): String? = if (json.isNull(key)) null else json.optString(key).ifEmpty { null }
+            val sessions = json.optJSONArray("sessions") ?: JSONArray()
+            update {
+                it.copy(
+                    session = text("session") ?: it.session,
+                    cloudSessionId = text("cloud"),
+                    lastSessionId = text("last"),
+                    cloudSessions = (0 until sessions.length()).map { index ->
+                        val entry = sessions.getJSONObject(index)
+                        CloudSessionInfo(entry.getString("id"), entry.optString("title"), entry.optString("url"), if (entry.isNull("repo")) null else entry.optString("repo"))
+                    },
+                    model = text("model"),
+                    effort = text("effort"),
+                    repo = text("repo"),
+                    pushMain = json.optBoolean("pushMain", true),
+                    autodeploy = json.optBoolean("autodeploy", false),
+                    extra = text("extra") ?: "",
+                    siteUrl = text("siteUrl"),
+                    siteState = text("siteState") ?: "off",
+                    ciState = text("ciState"),
+                    ciUrl = text("ciUrl"),
+                )
+            }
+        } catch (err: Exception) {
+            // An unreadable snapshot is just ignored.
+        }
+    }
+
+    fun persist() {
+        val store = prefs ?: return
+        val s = _state.value
+        val json = JSONObject()
+            .put("session", s.session).put("cloud", s.cloudSessionId).put("last", s.lastSessionId)
+            .put("model", s.model).put("effort", s.effort).put("repo", s.repo)
+            .put("pushMain", s.pushMain).put("autodeploy", s.autodeploy).put("extra", s.extra)
+            .put("siteUrl", s.siteUrl).put("siteState", s.siteState).put("ciState", s.ciState).put("ciUrl", s.ciUrl)
+        val sessions = JSONArray()
+        s.cloudSessions.forEach { c ->
+            sessions.put(JSONObject().put("id", c.id).put("title", c.title).put("url", c.url).put("repo", c.repo))
+        }
+        json.put("sessions", sessions)
+        store.edit().putString("snapshot", json.toString()).apply()
     }
 }

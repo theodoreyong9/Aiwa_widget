@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 12
+BACKEND_VERSION = 13
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -813,7 +813,7 @@ class Handler(BaseHTTPRequestHandler):
                 is_waiting, last_ping = waiting["since"] is not None, waiting["last_ping"]
             self.reply_json({
                 "version": BACKEND_VERSION, "model": model, "effort": effort, "cloud_session": cloud_session,
-                "last_session": last_cloud,
+                "last_session": last_cloud or next((e.get("id") for e in _load_cloud_sessions() if e.get("id")), None),
                 "repo": repo, "push_main": direct, "autodeploy": deploy, "extra": own,
                 "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "ci": _ci_snapshot(), "github_error": problem,

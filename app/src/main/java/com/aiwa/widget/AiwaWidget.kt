@@ -75,7 +75,15 @@ private fun Content(state: AiwaState) {
     // While a message is on its way (creating a cloud session takes a few
     // seconds) the session button says so: the widget has no other place
     // to show progress.
-    val sessionLabel = if (state.status == AiwaState.Status.WORKING) "Envoi…" else state.session.take(20)
+    // The backend's own state comes first: with it down or starting, nothing
+    // else on the widget can be trusted to work, and a widget that just sits
+    // there looks broken.
+    val sessionLabel = when {
+        state.backend == "starting" -> "⏳ Démarrage…"
+        state.backend == "down" -> "⚠ Backend arrêté"
+        state.status == AiwaState.Status.WORKING -> "Envoi…"
+        else -> state.session.take(20)
+    }
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
     // Room for a second row (two rows of buttons plus the padding).
     val tall = LocalSize.current.height >= 96.dp

@@ -164,13 +164,16 @@ try{ContextCompat.startForegroundService(context,Intent(context,KeepAliveService
 // force one restart (at most once per process).
 var backendStatus=awaitBackendStatus(bridge,30_000)
 if(backendStatus!=null&&backendStatus.version<EXPECTED_BACKEND_VERSION){
-delay(10_000)
-backendStatus=awaitBackendStatus(bridge,30_000)
-if(backendStatus!=null&&backendStatus.version<EXPECTED_BACKEND_VERSION&&!restartedOutdatedBackend){
+// The script started above may be replacing the old server right now: it
+// still answers for a few seconds. Wait for the NEW version instead of a
+// fixed pause, and only force a restart when it really doesn't come.
+val updated=awaitBackendVersion(bridge,EXPECTED_BACKEND_VERSION,45_000)
+if(updated!=null){
+backendStatus=updated
+}else if(!restartedOutdatedBackend){
 restartedOutdatedBackend=true
 startAiwaBackendViaTermux(context,forceRestart=true)
-delay(5000)
-awaitBackendStatus(bridge,30_000)
+backendStatus=awaitBackendVersion(bridge,EXPECTED_BACKEND_VERSION,45_000)?:awaitBackendStatus(bridge,10_000)
 }
 }
 BackendSync.refresh(bridge)
@@ -216,6 +219,11 @@ scope.launch{addCloudSession(context,bridge,copied)}
 }
 })
 }
+}
+when(state.backend){
+"starting"->Text("⏳ Démarrage du backend (Termux)… 10 à 20 s")
+"down"->Text("⚠ Backend arrêté : relance automatique en cours",color=MaterialTheme.colorScheme.error)
+else->{}
 }
 Text(statusLabel(state.status))
 // No conversation here or in the widget: a cloud session's replies can't

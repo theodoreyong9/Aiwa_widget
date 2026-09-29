@@ -21,11 +21,14 @@ private const val TERMUX_BASH = "/data/data/com.termux/files/usr/bin/bash"
 private val START_SCRIPT = listOf(
     "cd \"\$HOME/aiwa_widget\" 2>/dev/null || exit 1",
     "old=\$(git rev-parse HEAD 2>/dev/null)",
-    "git pull --ff-only -q >/dev/null 2>&1",
+    // Bounded: a slow network must not hold the start back for long.
+    "timeout 15 git pull --ff-only -q >/dev/null 2>&1",
     "new=\$(git rev-parse HEAD 2>/dev/null)",
     "if [ \"\$old\" != \"\$new\" ] || [ \"\$1\" = \"restart\" ]; then",
     "  pkill -f \"[a]iwa_server.py\" >/dev/null 2>&1",
-    "  sleep 2",
+    // Wait for the old server to be really gone (usually well under a
+    // second) instead of a fixed pause.
+    "  for i in 1 2 3 4 5 6 7 8; do curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1 || break; sleep 0.5; done",
     "fi",
     "if curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1; then exit 0; fi",
     "exec bash \"\$HOME/aiwa_widget/backend/start.sh\"",
@@ -47,6 +50,9 @@ fun startAiwaBackendViaTermux(context: Context, forceRestart: Boolean = false): 
         putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
     }
     context.startService(intent)
+    // Only when the backend was known to be down: launching this script while it
+    // runs is a no-op, and must not make the widget claim it is starting.
+    if (AiwaRepository.state.value.backend == "down") AiwaRepository.markBackendStarting()
     Result.success(Unit)
 } catch (err: Exception) {
     Result.failure(err)

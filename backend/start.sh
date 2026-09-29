@@ -13,10 +13,11 @@ set -euo pipefail
 DISTRO=ubuntu
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Same functional login check as setup-termux-proot.sh, not a text
-# parse of `proot-distro list --installed` — that parse turned out
-# unreliable (see setup-termux-proot.sh's own comment on this).
-if ! proot-distro login "$DISTRO" -- true >/dev/null 2>&1; then
+# Ubuntu present? A directory test, NOT a `proot-distro login ... -- true`:
+# that check used to start proot a first time just to look, then a second
+# time for real — each start costs seconds on a phone, so every launch of
+# the backend was about twice as slow as it had to be.
+if [ ! -d "${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/$DISTRO" ]; then
   echo "Ubuntu isn't installed yet — run bootstrap.sh by hand once first:"
   echo "  curl -fsSL https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/backend/bootstrap.sh | bash"
   exit 1
@@ -24,4 +25,7 @@ fi
 
 termux-wake-lock || true
 
-exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 /aiwa_widget/backend/aiwa_server.py
+# The server's own output goes to a file (this script usually runs with no
+# terminal at all, through Termux's RUN_COMMAND): `cat ~/aiwa_backend.log`
+# shows why a start failed.
+exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 -u /aiwa_widget/backend/aiwa_server.py > "$HOME/aiwa_backend.log" 2>&1
