@@ -83,6 +83,10 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <activity android:name=".ExtraReposPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <activity android:name=".OpenResultActivity" android:exported="false"
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""

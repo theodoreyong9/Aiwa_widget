@@ -19,6 +19,8 @@ data class BackendStatus(
     // start a new one — so its conversation can still be opened.
     val lastSession: String? = null,
     val repo: String? = null,
+    // Other repositories Claude may ALSO work on (told to it with the next message).
+    val extraRepos: List<String> = emptyList(),
     val pushMain: Boolean = true,
     // none / pages (GitHub Pages) / android (the APK as a GitHub release).
     val deploy: String = "none",
@@ -48,6 +50,9 @@ interface ClaudeBridge {
     suspend fun githubRepos(): List<RepoInfo>
     suspend fun selectRepo(repo: String?)
     suspend fun addRepo(text: String)
+
+    // Checks or unchecks a repository Claude may ALSO work on; null = none.
+    suspend fun toggleExtraRepo(repo: String?)
 
     // The instructions integrated into the conversation. Only the ones that
     // are not null are changed.

@@ -152,6 +152,20 @@ suspend fun switchOptions(
 }
 
 /**
+ * Checks or unchecks a repository Claude may ALSO work on (null = none). Told to it
+ * with the next message; whether it can reach the repository is up to the platform.
+ */
+suspend fun switchExtraRepo(context: Context, bridge: ClaudeBridge, repo: String?) {
+    try {
+        bridge.toggleExtraRepo(repo)
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "Impossible de changer les dépôts supplémentaires"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+}
+
+/**
  * Effort level (null = automatic): remembered for the next NEW session
  * (`claude --effort`) and, when a session is open, sent to it as
  * `/effort <level>` — cloud sessions document /effort as taking its value

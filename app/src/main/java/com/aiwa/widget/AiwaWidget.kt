@@ -205,7 +205,9 @@ private fun FullContent(state: AiwaState) {
     // ---- band 2: repository and model, half the width each -----------------
     val half = (avail - GAP) / 2f - 20f
     val repoName = state.repo?.substringAfter('/')
-    val repoText = "⎇ " + fitLabel(repoName ?: "Choisir un dépôt", half - textWidth("⎇  ▾", fontScale), fontScale) + " ▾"
+    // "+2": two more repositories Claude may work on (see the repository picker).
+    val extraSuffix = if (state.extraRepos.isNotEmpty()) " +${state.extraRepos.size}" else ""
+    val repoText = "⎇ " + fitLabel(repoName ?: "Choisir un dépôt", half - textWidth("⎇  ▾", fontScale) - textWidth(extraSuffix, fontScale), fontScale) + extraSuffix + " ▾"
     val modelText = fitLabel(modelLabel(state.model), half - textWidth(" ▾", fontScale), fontScale) + " ▾"
 
     // ---- band 3: Push, Deploy, and the site / Actions / "Prêt" -------------
@@ -456,7 +458,8 @@ private fun CompactContent(state: AiwaState) {
             val repoText = if (repoName == null) {
                 "⎇ Choisir un dépôt ▾"
             } else {
-                "⎇ " + fitLabel(repoName, avail - others - 20f - textWidth("⎇  ▾", fontScale), fontScale) + " ▾"
+                val more = if (state.extraRepos.isNotEmpty()) " +${state.extraRepos.size}" else ""
+                "⎇ " + fitLabel(repoName, avail - others - 20f - textWidth("⎇  ▾", fontScale) - textWidth(more, fontScale), fontScale) + more + " ▾"
             }
             Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Chip(repoText, pill, fg, actionStartActivity<RepoPickerActivity>(), GlanceModifier.defaultWeight(), alignStart = true)

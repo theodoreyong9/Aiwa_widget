@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 14
+BACKEND_VERSION = 15
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -95,6 +95,10 @@ current_repo = None
 push_main = True
 DEPLOY_MODES = ("none", "pages", "android")
 deploy_mode = "none"
+# Other repositories Claude may ALSO work on (checked in the widget's picker):
+# told to it in the instructions; the platform decides whether it can reach them.
+extra_repos = []
+EXTRA_REPOS_MAX = 8
 extra = ""
 # None = the CLI's own default effort.
 current_effort = None
@@ -137,6 +141,8 @@ def _load_state():
     mode = data.get("deploy")
     # Older state files only knew a yes/no: yes was GitHub Pages.
     deploy_mode = mode if mode in DEPLOY_MODES else ("pages" if data.get("autodeploy") is True else "none")
+    listed = data.get("extra_repos")
+    extra_repos[:] = [r for r in listed if isinstance(r, str) and github.REPO_RE.fullmatch(r) and r != current_repo][:EXTRA_REPOS_MAX] if isinstance(listed, list) else []
     text = data.get("extra")
     extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
     effort = data.get("effort")
@@ -159,7 +165,7 @@ def _save_state():
     try:
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
-            "push_main": push_main, "deploy": deploy_mode, "extra": extra,
+            "push_main": push_main, "deploy": deploy_mode, "extra": extra, "extra_repos": extra_repos,
             "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud, "ci_seen": ci_seen,
         }), encoding="utf-8")
     except OSError as err:
@@ -353,10 +359,19 @@ def _instruction_lines(repo, work, base, direct):
     """What the user's switches ask of Claude Code, in words, as (key, text)
     pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
-        deploy, topic = deploy_mode, waiting_topic
+        deploy, topic, more = deploy_mode, waiting_topic, list(extra_repos)
     lines = []
     if repo:
-        lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
+        text = f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."
+        if more:
+            text += (
+                " Dépôts supplémentaires sur lesquels tu peux aussi intervenir : " + ", ".join(more) + ". "
+                "Ils ne sont pas forcément attachés à ta session : quand tu dois en lire ou en modifier un, rattache-le avec l'outil `add_repo` "
+                "(accès `push` si tu dois y pousser) ; sans cet outil, ou si l'accès est refusé, dis-le-moi et n'insiste pas. "
+                "N'interviens sur aucun autre dépôt que ceux-là et celui de ta session. "
+                "Les consignes de push et de vérification ci-dessous valent pour chacun d'eux (sur chacun, ta propre branche, jamais de force-push)."
+            )
+        lines.append(("repo", text))
         if direct:
             lines.append((
                 "push",
@@ -831,12 +846,13 @@ class Handler(BaseHTTPRequestHandler):
                 model, cloud_session = current_model, current_cloud
                 repo, direct, problem = current_repo, push_main, github_error
                 deploy, own, effort = deploy_mode, extra, current_effort
+                more = list(extra_repos)
             with waiting_lock:
                 is_waiting, last_ping = waiting["since"] is not None, waiting["last_ping"]
             self.reply_json({
                 "version": BACKEND_VERSION, "model": model, "effort": effort, "cloud_session": cloud_session,
                 "last_session": last_cloud or next((e.get("id") for e in _load_cloud_sessions() if e.get("id")), None),
-                "repo": repo, "push_main": direct, "deploy": deploy, "autodeploy": deploy != "none", "extra": own,
+                "repo": repo, "push_main": direct, "deploy": deploy, "autodeploy": deploy != "none", "extra": own, "extra_repos": more,
                 "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "ci": _ci_snapshot(), "github_error": problem,
             })
@@ -938,10 +954,40 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 current_repo = requested or None
                 current_cloud = None
+                if current_repo in extra_repos:
+                    extra_repos.remove(current_repo)
                 _save_state()
             if requested:
                 _remember_repo(requested)
             self.reply_json({"accepted": True, "repo": current_repo})
+        elif self.path == "/api/github/extra":
+            # Checks or unchecks a repository Claude may ALSO work on ("" = none). Told
+            # to it with the next message; whether it can reach the repository is the
+            # platform's decision (its GitHub connection, the repositories attached).
+            requested = body.strip()
+            refusal = None
+            if requested and not github.REPO_RE.fullmatch(requested):
+                refusal = "invalid repository"
+            else:
+                with lock:
+                    if not requested:
+                        extra_repos.clear()
+                    elif requested == current_repo:
+                        refusal = "c'est déjà le dépôt principal"
+                    elif requested in extra_repos:
+                        extra_repos.remove(requested)
+                    elif len(extra_repos) >= EXTRA_REPOS_MAX:
+                        refusal = f"{EXTRA_REPOS_MAX} dépôts supplémentaires au plus"
+                    else:
+                        extra_repos.append(requested)
+                    _save_state()
+                    now = list(extra_repos)
+            if refusal:
+                self.reply_json({"accepted": False, "reason": refusal})
+            else:
+                if requested:
+                    _remember_repo(requested)
+                self.reply_json({"accepted": True, "extra_repos": now})
         elif self.path == "/api/github/add":
             # A repository given as a GitHub link or owner/name (copied from
             # the browser or the Claude app): remembered, and selected.
@@ -953,6 +999,8 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 current_repo = added
                 current_cloud = None
+                if added in extra_repos:
+                    extra_repos.remove(added)
                 _save_state()
             self.reply_json({"accepted": True, "repo": added})
         elif self.path == "/api/options":

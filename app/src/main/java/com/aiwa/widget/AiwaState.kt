@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 14
+const val EXPECTED_BACKEND_VERSION = 15
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -69,6 +69,8 @@ data class AiwaState(
     // alert when it needs an answer, plus the user's own text. siteState:
     // off / waiting / live (whether the Pages address answers).
     val repo: String? = null,
+    // Other repositories Claude may ALSO work on (checked in the repository picker).
+    val extraRepos: List<String> = emptyList(),
     val pushMain: Boolean = true,
     // none / pages (GitHub Pages) / android (the APK as a GitHub release).
     val deploy: String = "none",
@@ -153,6 +155,7 @@ object AiwaRepository {
                     model = text("model"),
                     effort = text("effort"),
                     repo = text("repo"),
+                    extraRepos = json.optJSONArray("extraRepos")?.let { list -> (0 until list.length()).map { list.getString(it) } } ?: emptyList(),
                     pushMain = json.optBoolean("pushMain", true),
                     deploy = text("deploy") ?: if (json.optBoolean("autodeploy", false)) "pages" else "none",
                     extra = text("extra") ?: "",
@@ -173,7 +176,7 @@ object AiwaRepository {
         val s = _state.value
         val json = JSONObject()
             .put("session", s.session).put("cloud", s.cloudSessionId).put("last", s.lastSessionId)
-            .put("model", s.model).put("effort", s.effort).put("repo", s.repo)
+            .put("model", s.model).put("effort", s.effort).put("repo", s.repo).put("extraRepos", JSONArray(s.extraRepos))
             .put("pushMain", s.pushMain).put("deploy", s.deploy).put("extra", s.extra)
             .put("siteUrl", s.siteUrl).put("siteState", s.siteState).put("siteKind", s.siteKind).put("ciState", s.ciState).put("ciUrl", s.ciUrl)
         val sessions = JSONArray()

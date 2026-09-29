@@ -47,6 +47,7 @@ object BackendSync {
                     model = status.model,
                     backendVersion = status.version,
                     repo = status.repo,
+                    extraRepos = status.extraRepos,
                     pushMain = status.pushMain,
                     deploy = status.deploy,
                     extra = status.extra,

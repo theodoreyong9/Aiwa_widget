@@ -1,4 +1,5 @@
 package com.aiwa.widget
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -208,6 +209,11 @@ class RepoPickerActivity : ComponentActivity() {
                     }
                     if (list.isEmpty()) add(PickerEntry("Aucun dépôt trouvé", false) { })
                 }
+                // Repositories Claude may ALSO work on, told to it with the next message.
+                if (state.repo != null) {
+                    val n = state.extraRepos.size
+                    add(PickerEntry("＋  Autres dépôts où Claude peut intervenir" + (if (n > 0) " ($n)" else "") + "…", n > 0) { openExtraRepos() })
+                }
                 // Claude Code reaches GitHub with ITS OWN connection, made in Claude's
                 // settings: Aiwa never logs in to GitHub and cannot tell whether it is
                 // connected. So ONE entry, which opens the page of Claude's connectors —
@@ -224,6 +230,11 @@ class RepoPickerActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.Default).launch { switchRepo(appContext, LocalClaudeBridge(), repo) }
     }
 
+    private fun openExtraRepos() {
+        startActivity(Intent(this, ExtraReposPickerActivity::class.java))
+        finish()
+    }
+
     private fun openClaudeSettings(url: String) {
         if (!openUrl(applicationContext, url)) toastOnMain(applicationContext, "Impossible d'ouvrir le navigateur.")
         finish()
@@ -233,3 +244,45 @@ class RepoPickerActivity : ComponentActivity() {
 // Claude's list of connectors: GitHub is connected, switched to another account or
 // disconnected there, and the page shows which of those applies.
 private const val CLAUDE_CONNECTORS_URL = "https://claude.ai/customize/connectors"
+
+/**
+ * The repositories Claude may ALSO work on, checked here (the picker stays open:
+ * several can be checked). The primary repository is the one the session starts on;
+ * these are only NAMED to Claude in the instructions of the next message, with the
+ * request to attach them itself (`add_repo`) when it needs them — the platform, not
+ * the text, decides whether it can reach them (the GitHub connection of the Claude
+ * account).
+ */
+class ExtraReposPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            var repos by remember { mutableStateOf<List<RepoInfo>?>(null) }
+            LaunchedEffect(Unit) {
+                val bridge = LocalClaudeBridge()
+                BackendSync.refresh(bridge)
+                repos = try { bridge.githubRepos() } catch (err: Exception) { emptyList() }
+            }
+            val entries = buildList {
+                add(PickerEntry("Claude peut aussi intervenir sur (dès le prochain message) — ${state.repo?.substringAfter('/') ?: "?"} reste le dépôt principal", false, header = true) { })
+                val list = repos
+                if (list == null) {
+                    add(PickerEntry("Chargement des dépôts…", false) { })
+                } else {
+                    list.filter { it.name != state.repo }.forEach { r ->
+                        add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name in state.extraRepos) { toggle(r.name) })
+                    }
+                    if (state.extraRepos.isNotEmpty()) add(PickerEntry("Tout décocher", false) { toggle(null) })
+                }
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun toggle(repo: String?) {
+        val appContext = applicationContext
+        CoroutineScope(Dispatchers.Default).launch { switchExtraRepo(appContext, LocalClaudeBridge(), repo) }
+    }
+}
