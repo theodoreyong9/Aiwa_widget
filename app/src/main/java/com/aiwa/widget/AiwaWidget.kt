@@ -46,9 +46,36 @@ class ToggleSessionsAction : ActionCallback {
     }
 }
 
+// Reported live: "des fois la liste des sessions dans le widget
+// disparaît" — provideGlance can run from a plain background refresh,
+// not just a tap, and used to silently replace the list with an empty
+// one on ANY transient listSessions() failure (backend momentarily
+// busy, etc.), even though the real list hadn't actually changed.
+// Caching the last successfully-fetched list here (a real, working
+// list is always better than a fetch hiccup wiping the screen) means a
+// blip no longer looks like every session vanished.
+private var cachedSessions: List<SessionInfo> = emptyList()
+
 class AiwaWidget:GlanceAppWidget(){override suspend fun provideGlance(context:Context,id:GlanceId){
+val bridge=LocalClaudeBridge()
+val sessions=try{bridge.listSessions()}catch(err:Exception){cachedSessions}
+if(sessions.isNotEmpty())cachedSessions=sessions
+// Reported live: "parfois dans le widget et l'appli c'est pas la même
+// session. C'est mal connecté" — AiwaRepository is an in-memory
+// singleton that resets to its defaults every time Android kills and
+// later restarts the app's process, which happens INDEPENDENTLY for a
+// widget-triggered wake-up versus an app-opened one — so each surface
+// could easily be showing whatever it happened to have cached last,
+// not the same real thing. The backend's own /api/status is the one
+// actual source of truth; resyncing from it here (and in
+// MainActivity's own boot effect) means both surfaces converge on it
+// instead of drifting apart across independent process restarts.
+try{
+val realSessionId=bridge.currentSessionId()
+val preview=sessions.find{it.id==realSessionId}?.preview?.take(8)?:realSessionId?.take(8)?:"aucune session"
+AiwaRepository.update{it.copy(session=preview,sessionId=realSessionId)}
+}catch(err:Exception){/* backend unreachable right now — keep whatever was last known rather than guessing */}
 val state=AiwaRepository.state.value
-val sessions=try{LocalClaudeBridge().listSessions()}catch(err:Exception){emptyList()}
 provideContent{Content(state,sessions)}}
 // Glance's ColorProvider(Int) overload takes a @ColorRes RESOURCE id,
 // not a raw packed color — passing android.graphics.Color.rgb(...)/

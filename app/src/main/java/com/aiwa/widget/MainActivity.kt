@@ -141,6 +141,26 @@ if(AiwaRepository.state.value.status==AiwaState.Status.WORKING){
 AiwaRepository.update{it.copy(status=AiwaState.Status.READY)}
 }
 startTermuxBackend()
+// Reported live: "je veux que tu implémentes le micro widget sans
+// ouvrir l'application dès la première utilisation" — explicitly
+// accepted trade-off (see KeepAliveService.kt): a real foreground
+// service keeps Aiwa's process resident so the widget's mic doesn't
+// need a cold start after the process has been idle a while. Starting
+// it here means it's running from the first time the app is opened,
+// same bootstrap spot as the Termux auto-start above.
+ContextCompat.startForegroundService(context,Intent(context,KeepAliveService::class.java))
+// Reported live: "parfois dans le widget et l'appli c'est pas la même
+// session. C'est mal connecté" — see AiwaWidget.kt's own copy of this
+// same resync for the full explanation (AiwaRepository's in-memory
+// state can drift after an independent process restart); doing it here
+// too on every app open means the app converges on the backend's real
+// current session instead of showing a stale local guess.
+try{
+val realSessionId=bridge.currentSessionId()
+val sessionsNow=try{bridge.listSessions()}catch(err:Exception){emptyList()}
+val preview=sessionsNow.find{it.id==realSessionId}?.preview?.take(8)?:realSessionId?.take(8)?:"aucune session"
+AiwaRepository.update{it.copy(session=preview,sessionId=realSessionId)}
+}catch(err:Exception){/* backend not reachable yet — startTermuxBackend() above already handles that */}
 }
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
 Text("AIWA",style=MaterialTheme.typography.headlineMedium)
