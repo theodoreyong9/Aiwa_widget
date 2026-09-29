@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Two rows: the conversation (Aiwa / session / mic / model / Claude) and,
-     when the widget is at least two cells high, the GitHub project (repository,
-     Push, Deploy, site, Actions). Everything is always there: the narrowest it
-     can be resized to is the width the fullest row needs. It can be shrunk to
-     the single row. The lists open in floating picker windows, so they need no
-     room in the widget. -->
-<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="360dp" android:minHeight="110dp" android:minResizeWidth="340dp" android:minResizeHeight="56dp" android:targetCellWidth="6" android:targetCellHeight="2" android:resizeMode="horizontal|vertical" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:previewLayout="@layout/aiwa_widget_preview" android:previewImage="@drawable/aiwa_widget_preview" android:description="@string/widget_description" android:widgetCategory="home_screen" />
+<!-- ONE shape, not resizable (resizeMode none): 4 cells wide, 2 cells high. The
+     widget draws four bands that share whatever height the launcher gives those
+     two cells, so there is no empty strip and nothing to customise (asked for:
+     "une seule forme, pas de personnalisation"). minWidth / minHeight are the
+     sizes for launchers older than Android 12, which ignore the target cells. To
+     see a change of shape, remove the widget and add it again. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android" android:minWidth="250dp" android:minHeight="110dp" android:targetCellWidth="4" android:targetCellHeight="2" android:resizeMode="none" android:updatePeriodMillis="0" android:initialLayout="@layout/aiwa_widget_placeholder" android:previewLayout="@layout/aiwa_widget_preview" android:previewImage="@drawable/aiwa_widget_preview" android:description="@string/widget_description" android:widgetCategory="home_screen" />

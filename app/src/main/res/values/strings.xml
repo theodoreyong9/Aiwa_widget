@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_description">Claude Code depuis l\'écran d\'accueil : sessions, micro, modèle, dépôt GitHub.</string>
+    <string name="widget_description">Claude Code depuis l\'écran d\'accueil : dicter, sessions, modèle, dépôt GitHub.</string>
 </resources>
