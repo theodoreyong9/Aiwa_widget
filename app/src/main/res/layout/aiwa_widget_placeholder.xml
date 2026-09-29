@@ -2,7 +2,7 @@
 <!-- Shown while Glance has not drawn the widget yet (just after adding it, or
      after the launcher restarts): the widget's dark pill with a loading
      indicator instead of a bare "AIWA". -->
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/preview_bg" android:padding="6dp">
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@drawable/widget_bg" android:padding="6dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:orientation="horizontal">
         <ProgressBar style="?android:attr/progressBarStyleSmall" android:layout_width="18dp" android:layout_height="18dp" android:indeterminate="true" />
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="10dp" android:text="Aiwa · chargement…" android:textColor="#E4E4EB" android:textSize="13sp" android:textStyle="bold" />

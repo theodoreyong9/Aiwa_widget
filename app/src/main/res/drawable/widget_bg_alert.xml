@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The same card with a red edge and a warm tint: Claude is waiting for an answer. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient android:angle="270" android:startColor="#33222A" android:endColor="#1B1216" />
+    <corners android:radius="26dp" />
+    <stroke android:width="2dp" android:color="#D64541" />
+</shape>

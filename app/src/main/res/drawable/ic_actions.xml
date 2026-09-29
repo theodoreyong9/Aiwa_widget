@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's "GitHub Actions" button: a play button in a rounded frame
+     (its background colour says how the last run went). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp" android:height="18dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M6,4 H18 A2,2 0 0 1 20,6 V18 A2,2 0 0 1 18,20 H6 A2,2 0 0 1 4,18 V6 A2,2 0 0 1 6,4 Z" android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round" />
+    <path android:pathData="M10,8.4 V15.6 L15.8,12 Z" android:fillColor="#FFFFFF" />
+</vector>
