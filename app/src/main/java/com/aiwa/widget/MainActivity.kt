@@ -1,6 +1,7 @@
 package com.aiwa.widget
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -82,13 +83,20 @@ else it.copy(status=AiwaState.Status.ERROR,notice="Impossible de lancer Termux :
 }
 refreshWidget()
 }
+// Android 13+ shows no notification without this permission, and the card on the
+// lock screen is one. Asked after the Termux one, never on top of it.
+val notificationPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){}
+fun askNotifications(){
+if(Build.VERSION.SDK_INT>=33&&ContextCompat.checkSelfPermission(context,"android.permission.POST_NOTIFICATIONS")!=PackageManager.PERMISSION_GRANTED)notificationPermissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
+}
 val termuxPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->
 if(granted)launchTermuxBackend()
 else AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Permission Termux refusée — impossible de démarrer le backend automatiquement.")}
+askNotifications()
 }
 fun startTermuxBackend(){
 val granted=ContextCompat.checkSelfPermission(context,"com.termux.permission.RUN_COMMAND")==PackageManager.PERMISSION_GRANTED
-if(granted)launchTermuxBackend() else termuxPermissionLauncher.launch("com.termux.permission.RUN_COMMAND")
+if(granted){launchTermuxBackend();askNotifications()} else termuxPermissionLauncher.launch("com.termux.permission.RUN_COMMAND")
 }
 LaunchedEffect(Unit){try{focus.requestFocus()}catch(err:Exception){}}
 LaunchedEffect(Unit){
