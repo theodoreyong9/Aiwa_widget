@@ -17,6 +17,8 @@ import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
+// The Intent overload of actionStartActivity lives in the appwidget module.
+import androidx.glance.appwidget.action.actionStartActivity as actionStartIntent
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -198,7 +200,7 @@ private fun Content(state: AiwaState) {
                             .background(claudeOrange)
                             .cornerRadius(20.dp)
                             .padding(horizontal = 11.dp, vertical = 11.dp)
-                            .clickable(actionStartActivity(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),
+                            .clickable(actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site)))),
                     )
                 }
             }
