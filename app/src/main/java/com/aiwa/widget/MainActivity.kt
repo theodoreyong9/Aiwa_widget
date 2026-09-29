@@ -209,8 +209,8 @@ scope.launch{switchCloud(context,bridge,c.id)}
 DropdownMenuItem(text={Text("Ajouter une session existante (lien copié)")},onClick={
 sessionMenuExpanded=false
 val copied=clipboardText(context)
-if(copied==null||!CLOUD_ID_IN_TEXT.containsMatchIn(copied)){
-toastOnMain(context,sessionLinkProblem(copied))
+if(copied.isNullOrBlank()){
+toastOnMain(context,EMPTY_CLIPBOARD_FOR_SESSION)
 }else{
 scope.launch{addCloudSession(context,bridge,copied)}
 }

@@ -128,7 +128,7 @@ fun GithubCard(state: AiwaState) {
                 }
             }
             Text("Alerte « Claude attend »", style = MaterialTheme.typography.titleSmall)
-            Text("Toujours active : chaque message demande à Claude d'envoyer un ping à la fin de sa réponse, et le bouton Claude du widget passe au rouge tant que tu n'as pas répondu ou ouvert la session.")
+            Text("Toujours active : le premier message d'une session demande à Claude d'envoyer un ping à la fin de chacune de ses réponses, et le bouton Claude du widget passe au rouge tant que tu n'as pas répondu ou ouvert la session.")
             Text(alertText(state))
             Button(onClick = {
                 scope.launch {
@@ -156,7 +156,7 @@ fun GithubCard(state: AiwaState) {
                 onClick = { scope.launch { switchOptions(context, bridge, extra = extraText.trim()) } },
             ) { Text("Enregistrer la consigne") }
             if (preview.isNotBlank()) {
-                Text("Ce que Claude Code reçoit avec le prochain message :", style = MaterialTheme.typography.labelMedium)
+                Text("Ce que Claude Code reçoit avec le premier message d'une session (ensuite, seulement ce que tu changes) :", style = MaterialTheme.typography.labelMedium)
                 Text(preview, style = MaterialTheme.typography.bodySmall)
             }
             val problem = state.githubError

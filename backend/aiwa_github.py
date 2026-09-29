@@ -26,9 +26,11 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPOS_DIR = Path.home() / "repos"
@@ -183,6 +185,61 @@ def _env():
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
     return env
+
+
+SESSION_IN_TEXT = re.compile(r"(?:session|cse)_[A-Za-z0-9]+")
+
+
+def _branch_session(repo, branch):
+    """None when the branch isn't in this repository; otherwise
+    (repo, session id or None). A cloud session's commits carry a
+    `Claude-Session: https://claude.ai/code/session_…` line, which is how a
+    branch name leads back to its session. Only the commits that are on the
+    branch and NOT on the default branch count: a brand-new branch is cut
+    from a history that holds other sessions' links, and must not be
+    mistaken for one of them (no commit of its own yet = no session known)."""
+    url = f"{GITHUB_BASE}/{repo}.git"
+    try:
+        if not _git(["ls-remote", "--heads", url, f"refs/heads/{branch}"], timeout=25).strip():
+            return None
+    except GithubError:
+        return None  # not there, or private without a login here
+    default = default_branch(repo)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            _git(["init", "-q", "--bare", tmp])
+            refs = [f"refs/heads/{branch}:refs/aiwa/branch", f"refs/heads/{default}:refs/aiwa/default"]
+            try:
+                _git(["fetch", "-q", "--depth", "50", "--filter=blob:none", url] + refs, cwd=tmp, timeout=60)
+            except GithubError:
+                _git(["fetch", "-q", "--depth", "50", url] + refs, cwd=tmp, timeout=90)
+            log = _git(["log", "-30", "--format=%B", "refs/aiwa/branch", "^refs/aiwa/default"], cwd=tmp)
+        except GithubError:
+            return (repo, None)
+    match = SESSION_IN_TEXT.search(log)
+    return (repo, match.group(0) if match else None)
+
+
+def find_branch_session(repos, branch):
+    """Looks for a branch in these repositories (in parallel) and returns
+    (repo, session id or None) — preferring a repository where the session
+    could be read — or None when no repository has that branch."""
+    found_without_session = None
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = [pool.submit(_branch_session, repo, branch) for repo in repos]
+        try:
+            for future in as_completed(futures, timeout=50):
+                result = future.result()
+                if result is None:
+                    continue
+                if result[1]:
+                    for other in futures:
+                        other.cancel()
+                    return result
+                found_without_session = found_without_session or result
+        except Exception:
+            pass
+    return found_without_session
 
 
 def _git(args, cwd=None, timeout=300):

@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 7
+BACKEND_VERSION = 8
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -265,7 +265,7 @@ def _load_cloud_sessions():
     return data if isinstance(data, list) else []
 
 
-def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None):
+def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=None, instr=None, model=None, effort=None):
     """The CLI has no non-interactive way to LIST cloud sessions, so the
     ones Aiwa created or was given a link to are remembered here, with the
     repository (and branch) a session was started on and a fingerprint of
@@ -279,12 +279,24 @@ def _save_cloud_session(session_id, title, url, repo=None, branch=None, direct=N
             "title": existing.get("title") or title,
             "url": url or existing.get("url") or f"https://claude.ai/code/{session_id}",
         }
-        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr)):
+        # model / effort: "" = automatic, absent = unknown.
+        for key, value in (("repo", repo), ("branch", branch), ("direct", direct), ("instr", instr), ("model", model), ("effort", effort)):
             value = existing.get(key) if value is None else value
             if value is not None:
                 entry[key] = value
         entries.insert(0, entry)
         CLOUD_STORE.write_text(json.dumps(entries[:30]), encoding="utf-8")
+
+
+def _update_session(session_id, **fields):
+    """Changes fields of a remembered session in place (its rank is kept)."""
+    with store_lock:
+        entries = _load_cloud_sessions()
+        for entry in entries:
+            if entry.get("id") == session_id:
+                entry.update(fields)
+                CLOUD_STORE.write_text(json.dumps(entries), encoding="utf-8")
+                return
 
 
 def _session_entry(session_id):
@@ -313,51 +325,58 @@ def _known_repos():
     return [r for r in known if isinstance(r, str) and github.REPO_RE.fullmatch(r)]
 
 
+_INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "alert": "alerte", "extra": "consigne perso"}
+
+
 def _instruction_lines(repo, branch, direct):
-    """What the user's switches ask of Claude Code, in words. Claude Code
-    does all of it itself, with its own GitHub access."""
+    """What the user's switches ask of Claude Code, in words, as (key, text)
+    pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
         deploy, own, topic = autodeploy, extra, waiting_topic
     lines = []
     if repo:
-        lines.append(f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi.")
+        lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
         if direct:
-            lines.append(f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request).")
+            lines.append(("push", f"Push : quand un changement est terminé, fais un commit et pousse directement sur la branche {branch} (pas de pull request)."))
         else:
-            lines.append(f"Push : travaille sur la branche {branch} (crée-la depuis la branche par défaut si elle n'existe pas), commit et push dessus, sans toucher à la branche principale.")
+            lines.append(("push", f"Push : travaille sur la branche {branch} (crée-la depuis la branche par défaut si elle n'existe pas), commit et push dessus, sans toucher à la branche principale."))
         if deploy:
-            lines.append(
+            lines.append((
+                "deploy",
                 f"Déploiement : le site est publié par GitHub Pages via GitHub Actions, à l'adresse {github.pages_url(repo)}. "
                 "S'il n'y a pas encore de workflow Pages (actions/configure-pages, upload-pages-artifact, deploy-pages, déclenché à chaque push sur la branche principale), ajoute-le ; pas de branche gh-pages. "
-                "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi."
-            )
+                "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi.",
+            ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
     # random topic; the command is harmless when the network blocks it.
-    lines.append(
+    lines.append((
+        "alert",
         "Alerte (obligatoire) : à la fin de CHAQUE réponse — quand tu as terminé, ou que tu attends une réponse, "
         f"une décision ou une validation de ma part — exécute cette commande shell pour me prévenir : `curl -s -m 5 -d attend {NTFY_SERVER}/{topic}` "
-        "(si le réseau la bloque, ignore l'erreur et continue). Termine ensuite ta réponse par ta question s'il y en a une."
-    )
+        "(si le réseau la bloque, ignore l'erreur et continue). Termine ensuite ta réponse par ta question s'il y en a une.",
+    ))
     if own:
-        lines.append(f"Consigne perso : {own}")
+        lines.append(("extra", f"Consigne perso : {own}"))
     return lines
 
 
 def _compose(entry, repo, branch, direct):
-    """The instructions added to a message, and their fingerprint. The full
-    block goes with a session's first message and whenever it changed;
-    otherwise a one-line reminder, so the conversation isn't buried."""
+    """The instructions added to a message, and what was told (a hash per
+    instruction, kept with the session). Everything goes with a session's
+    FIRST message; after that only what changed since — a new or altered
+    instruction, or a note that one was withdrawn — and nothing at all when
+    nothing changed, so the conversation isn't buried in repeats."""
     lines = _instruction_lines(repo, branch, direct)
-    fingerprint = hashlib.sha1("\n".join(lines).encode()).hexdigest()[:10]
+    told = {key: hashlib.sha1(text.encode()).hexdigest()[:8] for key, text in lines}
     previous = (entry or {}).get("instr")
-    if previous == fingerprint:
-        return (
-            f"\n\n[Aiwa] Mêmes consignes que précédemment{f' (dépôt {repo})' if repo else ''}. "
-            "N'oublie pas la commande d'alerte à la fin de ta réponse."
-        ), fingerprint
-    header = "consignes mises à jour" if previous else "consignes de cette conversation"
-    return f"\n\n[Aiwa — {header}]\n" + "\n".join(f"- {line}" for line in lines), fingerprint
+    if not isinstance(previous, dict) or not previous:
+        return "\n\n[Aiwa — consignes de cette conversation]\n" + "\n".join(f"- {text}" for _, text in lines), told
+    parts = [f"- {text}" for key, text in lines if previous.get(key) != told[key]]
+    parts += [f"- Consigne retirée : {_INSTRUCTION_LABELS.get(key, key)}." for key in previous if key not in told]
+    if not parts:
+        return "", told
+    return "\n\n[Aiwa — consignes mises à jour]\n" + "\n".join(parts), told
 
 
 def _preview():
@@ -381,21 +400,58 @@ def _last_json_object(output):
     return None
 
 
+def _branch_candidates():
+    """Repositories to look a branch up in: the current one, the ones of
+    remembered sessions, then the discovered list (see _repo_choices)."""
+    with lock:
+        current = current_repo
+    names = [current] + [e.get("repo") for e in _load_cloud_sessions()] + [c["name"] for c in _repo_choices()]
+    seen, out = set(), []
+    for name in names:
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out[:15]
+
+
 def cloud_add(text):
-    """Adds an EXISTING cloud session, given its link or id (copied from
-    the Claude app / claude.ai/code), and selects it."""
+    """Adds an EXISTING cloud session and selects it. `text` is its link or
+    id (copied from the Claude app / claude.ai/code) — or the name of its
+    branch (claude/…), which is looked up in the repositories Aiwa knows:
+    a session's commits carry its link. Returns (session id, None), or
+    (None, why not)."""
     global current_cloud, current_repo
     match = CLOUD_ID_RE.search(text)
-    if match is None:
-        return None
-    session_id = match.group(0)
+    repo = branch = None
+    if match:
+        session_id = match.group(0)
+        title = "Session " + session_id[:16]
+    else:
+        branch_match = re.search(r"claude/[A-Za-z0-9._/-]+", text)
+        if branch_match is None:
+            return None, "Ce n'est ni le lien d'une session (claude.ai/code/session_…) ni le nom d'une branche claude/…"
+        branch = branch_match.group(0).rstrip("/.")
+        found = github.find_branch_session(_branch_candidates(), branch)
+        if found is None:
+            return None, (
+                f"La branche {branch} n'est dans aucun dépôt que je connais (dépôt choisi, dépôts déjà utilisés, "
+                "dépôts publics du propriétaire). Choisis d'abord son dépôt avec ⎇, puis recommence — ou copie le lien de la session."
+            )
+        repo, session_id = found
+        if session_id is None:
+            return None, (
+                f"Branche trouvée dans {repo}, mais aucun de ses derniers commits ne mentionne la session. "
+                "Copie plutôt le lien de la session (claude.ai/code/session_…)."
+            )
+        title = branch
     url_match = CLOUD_URL_RE.search(text)
-    _save_cloud_session(session_id, "Session " + session_id[:16], url_match.group(0) if url_match else None)
+    # An imported session works on its own branch: that is the only one Claude can push to.
+    _save_cloud_session(session_id, title, url_match.group(0) if url_match else None, repo=repo, branch=branch, direct=True if branch else None)
     with lock:
         current_cloud = session_id
         current_repo = _session_entry(session_id).get("repo")
         _save_state()
-    return session_id
+    return session_id, None
 
 
 def _queue_followup(session_id, text):
@@ -511,7 +567,7 @@ def cloud_send(text, command=False):
         with lock:
             current_cloud = found
             _save_state()
-        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint)
+        _save_cloud_session(found, title, url, repo=repo, branch=branch, direct=direct_now if repo else None, instr=fingerprint, model=model or "", effort=effort or "")
         threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
@@ -674,14 +730,20 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 current_cloud = None if target == "new" else target
                 if target != "new":
-                    # A session belongs to the repository it was started on.
-                    current_repo = _session_entry(target).get("repo")
+                    # A session belongs to the repository it was started on,
+                    # and keeps the model / effort last asked for it.
+                    entry = _session_entry(target)
+                    current_repo = entry.get("repo")
+                    if "model" in entry:
+                        current_model = entry["model"] or None
+                    if "effort" in entry:
+                        current_effort = entry["effort"] or None
                 _save_state()
             self.reply_json({"accepted": True, "cloud_session": current_cloud})
         elif self.path == "/api/cloud/add":
-            added = cloud_add(body)
+            added, why_not = cloud_add(body)
             if added is None:
-                self.reply_json({"accepted": False, "reason": "no session id in that text"})
+                self.reply_json({"accepted": False, "reason": why_not})
             else:
                 self.reply_json({"accepted": True, "cloud_session": added})
         elif self.path == "/api/model":
@@ -691,7 +753,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with lock:
                 current_model = requested or None
+                session = current_cloud
                 _save_state()
+            if session:
+                _update_session(session, model=requested)
             self.reply_json({"accepted": True, "model": current_model})
         elif self.path == "/api/effort":
             # "" = automatic. Passed to `claude --effort` when a new cloud
@@ -702,7 +767,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with lock:
                 current_effort = requested or None
+                session = current_cloud
                 _save_state()
+            if session:
+                _update_session(session, effort=requested)
             self.reply_json({"accepted": True, "effort": current_effort})
         elif self.path == "/api/waiting/clear":
             _clear_waiting()

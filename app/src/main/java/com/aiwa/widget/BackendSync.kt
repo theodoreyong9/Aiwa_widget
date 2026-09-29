@@ -1,5 +1,6 @@
 package com.aiwa.widget
 
+import android.content.Context
 import com.aiwa.bridge.BackendStatus
 import com.aiwa.bridge.ClaudeBridge
 import kotlinx.coroutines.delay
@@ -52,6 +53,24 @@ object BackendSync {
             }
         }
     }
+}
+
+/**
+ * A widget tap doesn't go through the app, so the backend may simply not be
+ * running (Termux was stopped): a picker then showed an empty list and told
+ * the user to open Aiwa — which starts it. Starts it here (Termux
+ * RUN_COMMAND) and waits for it, so the picker shows real data. Returns
+ * whether the backend answers.
+ */
+suspend fun ensureBackend(context: Context, bridge: ClaudeBridge): Boolean {
+    try {
+        bridge.status()
+        return true
+    } catch (err: Exception) {
+        if (!isBackendUnreachable(err)) return true
+    }
+    startAiwaBackendViaTermux(context)
+    return awaitBackendStatus(bridge, 30_000) != null
 }
 
 /** Polls until the backend answers (it may be starting up), or gives up. */

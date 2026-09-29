@@ -110,10 +110,13 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         requireAccepted(postText("/api/cloud/select", target))
     }
 
-    // An EXISTING cloud session, given its link or id (the CLI can't list
-    // them); it becomes the current one.
+    // An EXISTING cloud session, given its link or id — or the name of its
+    // branch (claude/…), which the backend looks up in the repositories it
+    // knows (the CLI can't list sessions); it becomes the current one.
+    // Throws with the reason when it can't be found.
     override suspend fun addCloud(link: String) = withContext(Dispatchers.IO) {
-        requireAccepted(postText("/api/cloud/add", link))
+        val json = JSONObject(postText("/api/cloud/add", link))
+        if (!json.optBoolean("accepted", false)) throw IllegalStateException(json.optString("reason", "session introuvable"))
     }
 
     // Synchronous on the backend: creating a session can take a while

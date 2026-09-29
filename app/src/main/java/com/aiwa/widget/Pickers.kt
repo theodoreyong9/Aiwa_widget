@@ -87,8 +87,13 @@ class SessionPickerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by AiwaRepository.state.collectAsState()
-            // Fresh list from the backend every time the picker opens.
-            LaunchedEffect(Unit) { BackendSync.refresh(LocalClaudeBridge()) }
+            // Fresh list from the backend every time the picker opens (which
+            // is started first if it isn't running).
+            LaunchedEffect(Unit) {
+                val bridge = LocalClaudeBridge()
+                ensureBackend(applicationContext, bridge)
+                BackendSync.refresh(bridge)
+            }
             val entries = buildList {
                 add(PickerEntry("+  Nouvelle session", state.cloudSessionId == null) { pickCloud("new") })
                 state.cloudSessions.forEach { c ->
@@ -114,8 +119,8 @@ class SessionPickerActivity : ComponentActivity() {
     // only place Android hands the clipboard over.
     private fun addFromClipboard() {
         val text = clipboardText(this)
-        if (text == null || !CLOUD_ID_IN_TEXT.containsMatchIn(text)) {
-            toastOnMain(this, sessionLinkProblem(text))
+        if (text.isNullOrBlank()) {
+            toastOnMain(this, EMPTY_CLIPBOARD_FOR_SESSION)
             finish()
             return
         }
@@ -133,9 +138,13 @@ class ModelPickerActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by AiwaRepository.state.collectAsState()
-            LaunchedEffect(Unit) { BackendSync.refresh(LocalClaudeBridge()) }
+            LaunchedEffect(Unit) {
+                val bridge = LocalClaudeBridge()
+                ensureBackend(applicationContext, bridge)
+                BackendSync.refresh(bridge)
+            }
             val entries = buildList {
-                add(PickerEntry("Modèle", false, header = true) { })
+                add(PickerEntry("Modèle — envoyé à la session (/model). La pastille de l'appli Claude ne suit pas ce choix.", false, header = true) { })
                 MODEL_CHOICES.forEach { choice ->
                     add(PickerEntry(choice.label, choice.id == state.model) { pickModel(choice.id) })
                 }
@@ -171,8 +180,17 @@ class RepoPickerActivity : ComponentActivity() {
         setContent {
             val state by AiwaRepository.state.collectAsState()
             var repos by remember { mutableStateOf<List<RepoInfo>?>(null) }
+            var starting by remember { mutableStateOf(false) }
             LaunchedEffect(Unit) {
                 val bridge = LocalClaudeBridge()
+                // The backend may not be running (a widget tap never went
+                // through the app): start it and wait, don't show an empty list.
+                val up = try { bridge.status(); true } catch (err: Exception) { !isBackendUnreachable(err) }
+                if (!up) {
+                    starting = true
+                    ensureBackend(applicationContext, bridge)
+                    starting = false
+                }
                 BackendSync.refresh(bridge)
                 repos = try { bridge.githubRepos() } catch (err: Exception) { emptyList() }
             }
@@ -180,7 +198,7 @@ class RepoPickerActivity : ComponentActivity() {
                 add(PickerEntry("Aucun dépôt (chat libre)", state.repo == null) { pickRepo(null) })
                 val list = repos
                 if (list == null) {
-                    add(PickerEntry("Chargement des dépôts…", false) { })
+                    add(PickerEntry(if (starting) "Démarrage du backend (Termux)… quelques secondes" else "Chargement des dépôts…", false) { })
                 } else {
                     list.forEach { r ->
                         add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })

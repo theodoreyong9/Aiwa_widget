@@ -69,6 +69,8 @@ suspend fun switchCloud(context: Context, bridge: ClaudeBridge, target: String) 
 
 /** Adds an existing cloud session from its link/id (copied from the Claude app) and selects it. */
 suspend fun addCloudSession(context: Context, bridge: ClaudeBridge, link: String) {
+    // A branch name is looked up in the repositories: that can take a few seconds.
+    if (!CLOUD_ID_IN_TEXT.containsMatchIn(link)) toastOnMain(context, "Recherche de la session à partir de la branche…")
     try {
         bridge.addCloud(link)
         AiwaRepository.update { it.copy(notice = null) }
@@ -178,15 +180,9 @@ suspend fun switchEffort(context: Context, bridge: ClaudeBridge, level: String?)
     }
 }
 
-/** Why what is on the clipboard can't be imported as a cloud session — in words that say what to copy. */
-fun sessionLinkProblem(copied: String?): String {
-    val what = copied?.trim().orEmpty()
-    return if (what.isEmpty()) {
-        "Le presse-papiers est vide. Dans l'appli Claude, ouvre la session puis copie son lien (claude.ai/code/session_…)."
-    } else {
-        "Ce que tu as copié (« ${what.take(40)} ») n'est pas l'adresse d'une session. Il faut le lien claude.ai/code/session_… : dans l'appli Claude, ouvre la session puis copie son lien (pas le nom de la branche)."
-    }
-}
+/** The clipboard is empty: say what to copy. Anything else is judged by the backend, which explains itself. */
+const val EMPTY_CLIPBOARD_FOR_SESSION =
+    "Le presse-papiers est vide. Dans Claude Code, copie le lien de la session (claude.ai/code/session_…) ou le nom de sa branche (claude/…)."
 
 /** A repository given as a GitHub link or owner/name (e.g. copied from the browser): remembered and selected. */
 suspend fun addRepoFromText(context: Context, bridge: ClaudeBridge, text: String) {
