@@ -33,12 +33,37 @@ suspend fun switchSession(context: Context, bridge: ClaudeBridge, sessionId: Str
         bridge.selectSession(sessionId)
         // Only wipe the transcript when the session really changed;
         // BackendSync then loads the real history of the new one.
-        AiwaRepository.update { if (it.sessionId == sessionId) it else it.copy(output = "", historyFor = null) }
+        // Leaving cloud mode always counts as a change: the transcript
+        // then held a cloud conversation's local echo, not this session.
+        AiwaRepository.update { if (!it.cloud && it.sessionId == sessionId) it else it.copy(output = "", historyFor = null) }
     } catch (err: BusyException) {
         // Refused because a request is in flight; the refresh below keeps
         // showing the session that is actually current.
     } catch (err: Exception) {
         toastOnMain(context, describeFailure(context, err, "changer de session"))
+    }
+    BackendSync.refresh(bridge)
+    AiwaWidget().updateAll(context)
+}
+
+/**
+ * Switches to cloud mode: target "new" starts a new cloud session with
+ * the next message, otherwise the id of an existing cloud session (see
+ * CloudSessionInfo). Cloud conversations are read in the Claude app —
+ * Aiwa only sends (documented CLI limit) — so the transcript here is
+ * cleared, not loaded.
+ */
+suspend fun switchCloud(context: Context, bridge: ClaudeBridge, target: String) {
+    try {
+        bridge.selectCloud(target)
+        AiwaRepository.update {
+            val same = it.cloud && (if (target == "new") it.cloudSessionId == null else it.cloudSessionId == target)
+            if (same) it else it.copy(output = "", historyFor = null)
+        }
+    } catch (err: BusyException) {
+        // Nothing to do: the refresh below shows what is real.
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "passer en session cloud"))
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)

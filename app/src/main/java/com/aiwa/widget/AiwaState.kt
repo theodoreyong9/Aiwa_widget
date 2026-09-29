@@ -1,12 +1,13 @@
 package com.aiwa.widget
 
+import com.aiwa.bridge.CloudSessionInfo
 import com.aiwa.bridge.SessionInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 2
+const val EXPECTED_BACKEND_VERSION = 3
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -31,6 +32,11 @@ data class AiwaState(
     val sessionId: String? = null,
     val model: String? = null,
     val sessions: List<SessionInfo> = emptyList(),
+    // Cloud mode: messages go to a Claude Code cloud session (readable in
+    // the Claude app) instead of the phone's own claude process.
+    val cloud: Boolean = false,
+    val cloudSessionId: String? = null,
+    val cloudSessions: List<CloudSessionInfo> = emptyList(),
     val backendVersion: Int = 0,
     val status: Status = Status.READY,
     // The conversation transcript, shown by both the app and the widget.

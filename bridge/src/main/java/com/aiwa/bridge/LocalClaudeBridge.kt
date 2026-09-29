@@ -161,7 +161,47 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             session = if (json.isNull("session")) null else json.optString("session").ifEmpty { null },
             model = if (json.isNull("model")) null else json.optString("model").ifEmpty { null },
             version = json.optInt("version", 0),
+            mode = json.optString("mode", "local"),
+            cloudSession = if (json.isNull("cloud_session")) null else json.optString("cloud_session").ifEmpty { null },
         )
+    }
+
+    override suspend fun listCloudSessions(): List<CloudSessionInfo> = withContext(Dispatchers.IO) {
+        val array = JSONArray(getText("/api/cloud/sessions"))
+        (0 until array.length()).map {
+            val entry = array.getJSONObject(it)
+            CloudSessionInfo(
+                id = entry.getString("id"),
+                title = entry.optString("title", entry.getString("id")),
+                url = entry.optString("url"),
+            )
+        }
+    }
+
+    // target: "new" (the next message creates a cloud session) or the id
+    // of one of listCloudSessions().
+    override suspend fun selectCloud(target: String) = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/cloud/select", target))
+    }
+
+    // Synchronous on the backend: creating a session can take a while
+    // (the cloud machine starts). HONEST LIMIT (documented by Anthropic):
+    // the CLI only queues the message — there is no way to read the reply
+    // back, so it is read in the Claude app.
+    override suspend fun sendCloud(text: String): CloudSendResult = withContext(Dispatchers.IO) {
+        val json = JSONObject(postText("/api/cloud/message", text))
+        if (json.optBoolean("ok", false)) {
+            CloudSendResult(
+                ok = true,
+                sessionId = json.optString("session_id").ifEmpty { null },
+                url = json.optString("url").ifEmpty { null },
+                error = null,
+            )
+        } else {
+            val error = json.optString("error", "erreur inconnue")
+            if (error == "busy") throw BusyException("a cloud message is already being sent")
+            CloudSendResult(ok = false, sessionId = null, url = null, error = error)
+        }
     }
 
     override suspend fun currentSessionId(): String? = withContext(Dispatchers.IO) {

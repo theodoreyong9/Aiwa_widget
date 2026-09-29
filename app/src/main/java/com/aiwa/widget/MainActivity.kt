@@ -197,10 +197,22 @@ DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=
 // backend's real state (BackendSync) — never a local guess. The
 // history of a picked session is loaded by the effect above once
 // the session id actually changes.
-DropdownMenuItem(text={Text("Nouvelle session")},onClick={
+DropdownMenuItem(text={Text("Nouvelle session (téléphone)")},onClick={
 sessionMenuExpanded=false
 scope.launch{switchSession(context,bridge,null)}
 })
+// Cloud sessions: Aiwa only sends to them (a documented CLI limit),
+// the replies are read in the Claude app.
+DropdownMenuItem(text={Text("Nouvelle session cloud")},onClick={
+sessionMenuExpanded=false
+scope.launch{switchCloud(context,bridge,"new")}
+})
+for(c in state.cloudSessions){
+DropdownMenuItem(text={Text("Cloud · "+c.title)},onClick={
+sessionMenuExpanded=false
+scope.launch{switchCloud(context,bridge,c.id)}
+})
+}
 for(s in state.sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false

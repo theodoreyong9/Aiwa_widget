@@ -16,6 +16,10 @@ import kotlinx.coroutines.launch
  */
 suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean = false) {
     if (text.isBlank()) return
+    if (AiwaRepository.state.value.cloud) {
+        sendToCloud(context, bridge, text, toastErrors)
+        return
+    }
     try {
         var started = false
         bridge.sendMessage(text).collect { chunk ->
@@ -66,4 +70,43 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, t
         // The widget shows no conversation text, so its errors are toasts.
         if (toastErrors) toastOnMain(context, message)
     }
+}
+
+/**
+ * Cloud mode: the message goes to a Claude Code cloud session. Documented
+ * limit: the CLI only queues it — the reply can't be read back, it is in
+ * the Claude app — so Aiwa shows what was sent and says where the answer
+ * is (a silent send would look like nothing happened). Refused up front
+ * while another send is running, so a rejected message never leaves an
+ * echo behind.
+ */
+private suspend fun sendToCloud(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean) {
+    if (AiwaRepository.state.value.status == AiwaState.Status.WORKING) {
+        if (toastErrors) toastOnMain(context, "Un envoi est déjà en cours.")
+        return
+    }
+    AiwaRepository.update {
+        val separator = if (it.output.isBlank()) "" else "\n\n"
+        it.copy(status = AiwaState.Status.WORKING, output = it.output + separator + "🧑 $text")
+    }
+    CoroutineScope(Dispatchers.Default).launch { AiwaWidget().updateAll(context) }
+    var failure: String? = null
+    try {
+        val result = bridge.sendCloud(text)
+        if (!result.ok) failure = "Envoi cloud impossible : ${result.error}"
+    } catch (err: BusyException) {
+        failure = "Un envoi cloud est déjà en cours."
+    } catch (err: Exception) {
+        failure = when {
+            isBackendUnreachable(err) -> autoStartBackendMessage(context)
+            err is BackendOutdatedException -> err.message ?: "Backend obsolète"
+            else -> "[erreur: ${err.message}]"
+        }
+    }
+    val note = failure ?: "→ Envoyé. La réponse est dans l'appli Claude."
+    AiwaRepository.update {
+        it.copy(status = if (failure == null) AiwaState.Status.DONE else AiwaState.Status.ERROR, output = it.output + "\n\n" + note)
+    }
+    if (toastErrors) toastOnMain(context, failure ?: "Envoyé — réponse dans l'appli Claude")
+    BackendSync.refresh(bridge)
 }

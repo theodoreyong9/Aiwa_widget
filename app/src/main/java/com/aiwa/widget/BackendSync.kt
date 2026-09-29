@@ -24,19 +24,33 @@ object BackendSync {
         val generation = started.incrementAndGet()
         val status = try { bridge.status() } catch (err: Exception) { return }
         val fetched = try { bridge.listSessions() } catch (err: Exception) { null }
+        val fetchedCloud = try { bridge.listCloudSessions() } catch (err: Exception) { null }
+        val isCloud = status.mode == "cloud"
+        // Copied out: a property of a class from another module can't be
+        // smart-cast.
+        val cloudId = status.cloudSession
         synchronized(lock) {
             if (generation < applied) return
             applied = generation
             AiwaRepository.update { current ->
                 val sessions = fetched ?: current.sessions
-                val label = sessions.find { it.id == status.session }?.preview?.take(40)
-                    ?: status.session?.take(8)
-                    ?: "Nouvelle session"
+                val cloudSessions = fetchedCloud ?: current.cloudSessions
+                val label = if (isCloud) {
+                    val title = cloudSessions.find { it.id == cloudId }?.title?.take(30)
+                    "Cloud · " + (title ?: cloudId?.take(8) ?: "nouvelle")
+                } else {
+                    sessions.find { it.id == status.session }?.preview?.take(40)
+                        ?: status.session?.take(8)
+                        ?: "Nouvelle session"
+                }
                 current.copy(
                     session = label,
                     sessionId = status.session,
                     model = status.model,
                     sessions = sessions,
+                    cloud = isCloud,
+                    cloudSessionId = cloudId,
+                    cloudSessions = cloudSessions,
                     backendVersion = status.version,
                 )
             }
@@ -56,6 +70,9 @@ object BackendSync {
      */
     private suspend fun loadHistoryIfNeeded(bridge: ClaudeBridge) {
         val current = AiwaRepository.state.value
+        // A cloud session has no history to load here: its conversation
+        // lives in the Claude app.
+        if (current.cloud) return
         val id = current.sessionId ?: return
         if (current.status == AiwaState.Status.WORKING || current.historyFor == id) return
         val history = try {

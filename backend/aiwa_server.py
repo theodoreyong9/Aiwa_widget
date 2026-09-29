@@ -22,9 +22,15 @@ process (instead of exiting after the first, which is what closing
 stdin right after the one message used to do) was unverified — this
 file is the actual test of that assumption, not a guarantee.
 """
+import fcntl
 import json
+import os
+import pty
 import re
+import select
+import struct
 import subprocess
+import termios
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -43,13 +49,23 @@ PORT = 8787
 # expects, so a stale checkout/running server is detected and fixed
 # instead of silently missing routes (reported live: history never
 # loaded because the backend running on the phone predated /api/history).
-BACKEND_VERSION = 2
+BACKEND_VERSION = 3
 # Longest transcript /api/history will send back — sessions can be
 # megabytes; only the most recent part is useful in a phone UI.
 MAX_HISTORY_CHARS = 40000
 # Values passed to `claude --model`. Restrictive on purpose: it ends up
 # as a command-line argument, and must never look like another flag.
 SESSION_RE = re.compile(r"[A-Za-z0-9-]{8,64}")
+# A cloud session needs a git repository to start from. Documented: a
+# local repo with at least one commit is uploaded as a bundle, no GitHub
+# needed. Same directory the manual test used, so a one-time "trust this
+# folder" answer given there still applies.
+CLOUD_DIR = Path.home() / "chat-cloud"
+CLOUD_STORE = Path.home() / ".aiwa_cloud_sessions.json"
+CLOUD_ID_RE = re.compile(r"(?:session|cse)_[A-Za-z0-9]+")
+CLOUD_URL_RE = re.compile(r"https://claude\.ai/code/[^\s\"')>\]]+")
+ANSI_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*\x07|[@-Z\\-_])")
+cloud_store_lock = threading.Lock()
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
 # How long a single turn gets before this backend gives up on it and
 # kills the underlying process. This is a safety net against a turn
@@ -70,6 +86,14 @@ current_session = None
 # None means "the CLI's own default model" — otherwise an alias or model
 # id passed as `claude --model <value>` whenever a process is started.
 current_model = None
+# "local": messages go to the persistent claude process on this phone.
+# "cloud": messages go to a Claude Code CLOUD session instead (visible in
+# the Claude app's Code tab) — current_cloud is its id, or None when the
+# next message should create a new one.
+current_mode = "local"
+current_cloud = None
+cloud_lock = threading.Lock()
+cloud_busy = False
 # The one persistent claude process, or None if none is currently
 # running (nothing sent yet, it crashed, or a session switch killed it
 # deliberately — see /api/session below). Guarded by process_lock
@@ -183,6 +207,151 @@ def read_session_transcript(session_id):
     if len(transcript) > MAX_HISTORY_CHARS:
         transcript = "…" + transcript[-MAX_HISTORY_CHARS:]
     return transcript
+
+
+def _clean(text):
+    return ANSI_RE.sub("", text).replace("\r", "\n")
+
+
+def _ensure_cloud_repo():
+    CLOUD_DIR.mkdir(parents=True, exist_ok=True)
+    if not (CLOUD_DIR / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=CLOUD_DIR, check=True)
+    has_commit = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD"], cwd=CLOUD_DIR, capture_output=True).returncode == 0
+    if not has_commit:
+        (CLOUD_DIR / "README.md").write_text("chat\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=CLOUD_DIR, check=True)
+        subprocess.run(["git", "-c", "user.name=aiwa", "-c", "user.email=aiwa@example.com", "commit", "-qm", "init"], cwd=CLOUD_DIR, check=True)
+
+
+def _run_with_pty(command, cwd, timeout):
+    """Runs a command as if in a real terminal (creating a cloud session
+    shows a live progress display, and that is exactly how the manual test
+    that worked ran it). Returns (exit code, cleaned output, timed out)."""
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 200, 0, 0))
+    proc = subprocess.Popen(command, cwd=cwd, stdin=slave, stdout=slave, stderr=slave, close_fds=True, start_new_session=True)
+    os.close(slave)
+    chunks = []
+    deadline = time.time() + timeout
+    timed_out = False
+    try:
+        while True:
+            left = deadline - time.time()
+            if left <= 0:
+                timed_out = True
+                proc.kill()
+                break
+            ready, _, _ = select.select([master], [], [], min(left, 1.0))
+            if ready:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+            elif proc.poll() is not None:
+                break
+    finally:
+        os.close(master)
+    try:
+        code = proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        code = proc.wait()
+    return code, _clean(b"".join(chunks).decode("utf-8", "replace")), timed_out
+
+
+def _load_cloud_sessions():
+    try:
+        data = json.loads(CLOUD_STORE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_cloud_session(session_id, title, url):
+    """The CLI has no non-interactive way to LIST cloud sessions, so the
+    ones Aiwa created are remembered here (newest first)."""
+    with cloud_store_lock:
+        entries = _load_cloud_sessions()
+        existing = next((e for e in entries if e.get("id") == session_id), None)
+        entries = [e for e in entries if e.get("id") != session_id]
+        entries.insert(0, {
+            "id": session_id,
+            "title": (existing or {}).get("title") or title,
+            "url": url or (existing or {}).get("url") or f"https://claude.ai/code/{session_id}",
+        })
+        CLOUD_STORE.write_text(json.dumps(entries[:30]), encoding="utf-8")
+
+
+def _last_json_object(output):
+    for line in reversed(output.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    return None
+
+
+def cloud_send(text):
+    """Sends one message to a Claude Code cloud session — creating a new
+    one when none is selected. HONEST LIMIT (documented): the CLI only
+    queues the message and returns; there is no way to read the reply
+    back, it is read in the Claude app. Synchronous: creating a session
+    can take a while while the cloud machine starts."""
+    global current_mode, current_cloud, cloud_busy
+    with cloud_lock:
+        if cloud_busy:
+            return {"ok": False, "error": "busy"}
+        cloud_busy = True
+        session_id = current_cloud
+    title = " ".join(text.split())[:60]
+    try:
+        if session_id:
+            done = subprocess.run(
+                ["claude", "-p", "--cloud", session_id, "--output-format", "json"],
+                input=text, capture_output=True, text=True, timeout=90,
+            )
+            output = _clean((done.stdout or "") + (done.stderr or ""))
+            data = _last_json_object(output)
+            if data is not None:
+                ok, url, error = data.get("ok") is True, data.get("url"), data.get("error")
+            else:
+                ok, url, error = done.returncode == 0, None, None
+            if not ok:
+                return {"ok": False, "error": error or output.strip()[-400:] or f"code {done.returncode}"}
+            _save_cloud_session(session_id, title, url)
+            return {"ok": True, "session_id": session_id, "url": url}
+        _ensure_cloud_repo()
+        task = "Message : " + text if text.lstrip().startswith("-") else text
+        code, output, timed_out = _run_with_pty(["claude", "--cloud", task], CLOUD_DIR, 180)
+        ids = CLOUD_ID_RE.findall(output)
+        found = next((i for i in ids if i.startswith("session_")), ids[0] if ids else None)
+        url_match = CLOUD_URL_RE.search(output)
+        url = url_match.group(0) if url_match else None
+        if found is None and url:
+            from_url = CLOUD_ID_RE.search(url)
+            found = from_url.group(0) if from_url else None
+        print(f"[{_ts()}] cloud_send: created={found!r} code={code} timed_out={timed_out}", flush=True)
+        if found is None:
+            reason = "délai dépassé" if timed_out else f"aucun identifiant de session trouvé (code {code})"
+            return {"ok": False, "error": reason + " — sortie : " + output.strip()[-400:]}
+        with lock:
+            current_cloud = found
+            current_mode = "cloud"
+        _save_cloud_session(found, title, url)
+        return {"ok": True, "session_id": found, "url": url}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "délai dépassé"}
+    except (OSError, subprocess.CalledProcessError) as err:
+        return {"ok": False, "error": str(err)}
+    finally:
+        with cloud_lock:
+            cloud_busy = False
 
 
 def _kill_process(proc):
@@ -349,9 +518,13 @@ class Handler(BaseHTTPRequestHandler):
                 status = "busy" if busy else "ready"
                 session = current_session
                 model = current_model
-            self.reply_json({"session": session, "status": status, "model": model, "version": BACKEND_VERSION})
+                mode = current_mode
+                cloud_session = current_cloud
+            self.reply_json({"session": session, "status": status, "model": model, "version": BACKEND_VERSION, "mode": mode, "cloud_session": cloud_session})
         elif self.path == "/api/sessions":
             self.reply_json(list_real_sessions())
+        elif self.path == "/api/cloud/sessions":
+            self.reply_json(_load_cloud_sessions())
         elif self.path.startswith("/api/history"):
             session_id = parse_qs(urlparse(self.path).query).get("session", [None])[0]
             transcript = read_session_transcript(session_id) if session_id else None
@@ -360,7 +533,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global busy, current_session, current_model, process
+        global busy, current_session, current_model, current_mode, current_cloud, process
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -392,6 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply_json({"accepted": False, "reason": "busy"})
                     return
                 current_session = requested_session or None
+                current_mode = "local"
             _drop_process_and_rewarm(f"/api/session -> {current_session!r}")
             self.reply_json({"accepted": True, "session": current_session})
         elif self.path == "/api/model":
@@ -406,6 +580,19 @@ class Handler(BaseHTTPRequestHandler):
                 current_model = requested or None
             _drop_process_and_rewarm(f"/api/model -> {current_model!r}")
             self.reply_json({"accepted": True, "model": current_model})
+        elif self.path == "/api/cloud/select":
+            # "new" = cloud mode, the next message creates a session;
+            # otherwise a cloud session id from /api/cloud/sessions.
+            target = body.strip()
+            if target != "new" and not CLOUD_ID_RE.fullmatch(target):
+                self.reply_json({"accepted": False, "reason": "invalid cloud session"})
+                return
+            with lock:
+                current_mode = "cloud"
+                current_cloud = None if target == "new" else target
+            self.reply_json({"accepted": True, "cloud_session": current_cloud})
+        elif self.path == "/api/cloud/message":
+            self.reply_json(cloud_send(body))
         elif self.path == "/api/background":
             self.reply_json({"accepted": False, "reason": "not wired yet"})
         else:
