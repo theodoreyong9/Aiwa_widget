@@ -33,10 +33,9 @@ data class AiwaState(
     val sessions: List<SessionInfo> = emptyList(),
     val backendVersion: Int = 0,
     val status: Status = Status.READY,
-    // The full transcript — shown in the app only.
+    // The full transcript — shown in the app only. The widget shows no
+    // conversation text at all (explicit request).
     val output: String = "",
-    // Only the latest reply (or error) — what the compact widget shows.
-    val lastReply: String = "",
     val question: String? = null,
 ) {
     enum class Status { READY, WORKING, WAITING, DONE, ERROR }

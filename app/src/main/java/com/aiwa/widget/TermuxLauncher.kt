@@ -52,33 +52,6 @@ fun startAiwaBackendViaTermux(context: Context, forceRestart: Boolean = false): 
     Result.failure(err)
 }
 
-private val SESSION_ID_REGEX = Regex("[A-Za-z0-9-]{8,64}")
-
-/**
- * Opens a real, interactive `claude --resume <id>` in a new Termux
- * session. The id is handed to bash as a positional argument, never
- * interpolated into the command string. RUN_COMMAND_SESSION_ACTION is
- * deliberately left out: its documented default is "switch to the new
- * session and open Termux", which is exactly what we want (the "1" used
- * before is not that).
- */
-fun openSessionInClaudeCode(context: Context, sessionId: String): Result<Unit> = try {
-    require(SESSION_ID_REGEX.matches(sessionId)) { "identifiant de session invalide" }
-    val intent = Intent(ACTION_RUN_COMMAND).apply {
-        setClassName(TERMUX_PACKAGE, RUN_COMMAND_SERVICE)
-        putExtra("com.termux.RUN_COMMAND_PATH", TERMUX_BASH)
-        putExtra(
-            "com.termux.RUN_COMMAND_ARGUMENTS",
-            arrayOf("-c", "exec proot-distro login ubuntu -- claude --resume \"\$1\"", "_", sessionId),
-        )
-        putExtra("com.termux.RUN_COMMAND_BACKGROUND", false)
-    }
-    context.startService(intent)
-    Result.success(Unit)
-} catch (err: Exception) {
-    Result.failure(err)
-}
-
 // LocalClaudeBridge.withClearConnectionError's message always starts
 // this way; it arrives wrapped as a plain IllegalStateException.
 private const val BACKEND_NOT_REACHABLE_PREFIX = "Backend not reachable"

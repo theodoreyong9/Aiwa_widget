@@ -10,7 +10,7 @@ import com.aiwa.bridge.ClaudeBridge
  * coroutine (a duplicated copy once drifted and never captured the real
  * session id).
  */
-suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
+suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean = false) {
     if (text.isBlank()) return
     try {
         var started = false
@@ -29,11 +29,10 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
                     it.copy(
                         status = AiwaState.Status.WORKING,
                         output = it.output + separator + "🧑 $text\n\n🤖 ",
-                        lastReply = "",
                     )
                 }
             } else if (chunk.isNotEmpty()) {
-                AiwaRepository.update { it.copy(output = it.output + chunk, lastReply = it.lastReply + chunk) }
+                AiwaRepository.update { it.copy(output = it.output + chunk) }
             }
         }
         // DONE first, then sync: BackendSync may reveal a brand-new
@@ -43,7 +42,10 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
         BackendSync.refresh(bridge)
     } catch (err: BusyException) {
         // Not a failure: a real request is already in flight, and
-        // nothing was reset above (see the `started` guard).
+        // nothing was reset above (see the `started` guard). The widget
+        // has no screen to show it on, so it gets a short toast instead
+        // of a dictation that silently vanishes.
+        if (toastErrors) toastOnMain(context, "Claude travaille encore sur le message précédent.")
     } catch (err: Exception) {
         // A widget-only user never opens the app, so the backend's
         // auto-start there never runs — trigger it from here too.
@@ -52,6 +54,8 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
             err is BackendOutdatedException -> err.message ?: "Backend obsolète"
             else -> "[erreur: ${err.message}]"
         }
-        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n" + message, lastReply = message) }
+        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n" + message) }
+        // The widget shows no conversation text, so its errors are toasts.
+        if (toastErrors) toastOnMain(context, message)
     }
 }

@@ -62,6 +62,18 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <!-- The two list buttons of the widget open these small floating
+             windows (see Pickers.kt). Same translucent, own-task setup as
+             DictateActivity; not exported — the widget reaches them
+             through a PendingIntent created by this app. -->
+        <activity android:name=".SessionPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+        <activity android:name=".ModelPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />

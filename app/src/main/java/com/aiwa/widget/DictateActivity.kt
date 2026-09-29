@@ -92,7 +92,7 @@ class DictateActivity : ComponentActivity() {
         val appContext = applicationContext
         if (text.isNotBlank()) {
             CoroutineScope(Dispatchers.Default).launch {
-                sendAndTrack(appContext, LocalClaudeBridge(), text)
+                sendAndTrack(appContext, LocalClaudeBridge(), text, toastErrors = true)
                 AiwaWidget().updateAll(appContext)
             }
         }

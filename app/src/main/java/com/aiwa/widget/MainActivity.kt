@@ -20,7 +20,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.BackendOutdatedException
-import com.aiwa.bridge.BusyException
 import com.aiwa.bridge.LocalClaudeBridge
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,7 +40,6 @@ val state by AiwaRepository.state.collectAsState()
 var input by remember{mutableStateOf("")}
 var sessionMenuExpanded by remember{mutableStateOf(false)}
 fun refreshWidget(){scope.launch{AiwaWidget().updateAll(context)}}
-fun reportError(err:Exception){AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output=it.output+"\n[erreur: ${err.message}]")}}
 // Reported live: "the mic fills the text field but I still have to
 // tap Envoyer myself — that's ugly, it should be automatic". Both the
 // manual "➤ Envoyer" button and dictation completing now go through
@@ -210,8 +208,8 @@ Text("AIWA",style=MaterialTheme.typography.headlineMedium)
 Box{
 Text("Session : ${state.session}",modifier=Modifier.clickable{
 scope.launch{
-try{BackendSync.refresh(bridge);sessionMenuExpanded=true}
-catch(err:Exception){reportError(err)}
+BackendSync.refresh(bridge)
+sessionMenuExpanded=true
 }
 })
 DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=false}){
@@ -221,28 +219,12 @@ DropdownMenu(expanded=sessionMenuExpanded,onDismissRequest={sessionMenuExpanded=
 // the session id actually changes.
 DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
-scope.launch{
-try{
-bridge.selectSession(null)
-AiwaRepository.update{if(it.sessionId==null)it else it.copy(output="",lastReply="")}
-}catch(err:BusyException){}
-catch(err:Exception){reportError(err)}
-BackendSync.refresh(bridge)
-refreshWidget()
-}
+scope.launch{switchSession(context,bridge,null)}
 })
 for(s in state.sessions){
 DropdownMenuItem(text={Text(s.preview)},onClick={
 sessionMenuExpanded=false
-scope.launch{
-try{
-bridge.selectSession(s.id)
-AiwaRepository.update{if(it.sessionId==s.id)it else it.copy(output="",lastReply="")}
-}catch(err:BusyException){}
-catch(err:Exception){reportError(err)}
-BackendSync.refresh(bridge)
-refreshWidget()
-}
+scope.launch{switchSession(context,bridge,s.id)}
 })
 }
 }
