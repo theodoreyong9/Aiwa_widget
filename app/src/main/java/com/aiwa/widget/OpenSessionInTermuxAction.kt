@@ -59,7 +59,15 @@ class OpenSessionInTermuxAction : ActionCallback {
                 )
             }
         } catch (err: Exception) {
-            AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = "Impossible de changer de session : ${err.message}") }
+            // Reported live via a widget screenshot: "les boutons session
+            // ne marchent pas" turned out to be a real, correctly-reported
+            // error ("Backend not reachable ... it isn't started") — the
+            // action itself was never broken, the backend just never
+            // auto-starts unless MainActivity has been opened at least
+            // once. Firing that same auto-start from here means the widget
+            // can now recover from this on its own.
+            val message = if (isBackendUnreachable(err)) autoStartBackendMessage(context) else "Impossible de changer de session : ${err.message}"
+            AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = message) }
         }
         if (sessionId != null) {
             try {

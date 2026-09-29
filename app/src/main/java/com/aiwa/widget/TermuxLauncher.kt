@@ -41,3 +41,37 @@ fun startAiwaBackendViaTermux(context: Context): Result<Unit> = try {
 } catch (err: Exception) {
     Result.failure(err)
 }
+
+// LocalClaudeBridge.withClearConnectionError's own message, always
+// starting this way — see its comment. Matched by prefix rather than
+// exception type since it arrives wrapped as a plain IllegalStateException.
+private const val BACKEND_NOT_REACHABLE_PREFIX = "Backend not reachable"
+
+/**
+ * Reported live via a widget screenshot: tapping a session row DID
+ * show a real error ("Backend not reachable ... it isn't started"),
+ * proving the widget's own action code was never the problem — the
+ * backend just only ever auto-started from MainActivity's own
+ * LaunchedEffect, which never runs for someone using ONLY the widget.
+ */
+fun isBackendUnreachable(err: Throwable): Boolean =
+    err.message?.startsWith(BACKEND_NOT_REACHABLE_PREFIX) == true
+
+/**
+ * Same auto-start this widget action or the mic just failed to reach,
+ * fired directly from the widget/trampoline side instead of requiring
+ * the user to open MainActivity first. Already-granted RUN_COMMAND
+ * permission (the normal case, once the app has been opened at least
+ * once) makes this silent; a fresh install with the permission never
+ * granted yet fails with a SecurityException, caught inside
+ * startAiwaBackendViaTermux itself — surfaced here as a clear ask
+ * instead of another confusing connection error.
+ */
+fun autoStartBackendMessage(context: Context): String {
+    val result = startAiwaBackendViaTermux(context)
+    return if (result.isSuccess) {
+        "Backend pas démarré — lancement automatique en cours, réessaie dans 10-15 secondes."
+    } else {
+        "Backend pas démarré et impossible de le lancer depuis le widget (${result.exceptionOrNull()?.message}) — ouvre l'app Aiwa une fois pour autoriser le démarrage automatique."
+    }
+}

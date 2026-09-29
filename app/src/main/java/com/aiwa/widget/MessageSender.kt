@@ -1,4 +1,5 @@
 package com.aiwa.widget
+import android.content.Context
 import com.aiwa.bridge.BusyException
 import com.aiwa.bridge.ClaudeBridge
 
@@ -12,7 +13,7 @@ import com.aiwa.bridge.ClaudeBridge
  * widget instead of the app. One shared function means that kind of
  * drift can't happen again.
  */
-suspend fun sendAndTrack(bridge: ClaudeBridge, text: String) {
+suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String) {
     if (text.isBlank()) return
     try {
         var started = false
@@ -54,6 +55,13 @@ suspend fun sendAndTrack(bridge: ClaudeBridge, text: String) {
         // Nothing was ever reset above (see the `started` guard), so
         // there is genuinely nothing to undo here.
     } catch (err: Exception) {
-        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n[erreur: ${err.message}]") }
+        // Reported live via a widget screenshot: sending from the widget's
+        // mic (or a session tap) before the app was ever opened once fails
+        // with "Backend not reachable" — MainActivity's own auto-start
+        // never gets a chance to run in that case. Firing it here too
+        // means the NEXT attempt has a real shot at working, instead of
+        // failing the same way forever until the user opens the app.
+        val message = if (isBackendUnreachable(err)) autoStartBackendMessage(context) else "[erreur: ${err.message}]"
+        AiwaRepository.update { it.copy(status = AiwaState.Status.ERROR, output = it.output + "\n" + message) }
     }
 }

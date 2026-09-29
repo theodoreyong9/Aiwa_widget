@@ -57,7 +57,7 @@ fun doSend(text:String){
 // now owns this reset entirely, and only performs it once the backend
 // has actually confirmed acceptance (see its own comment).
 scope.launch{
-sendAndTrack(bridge,text)
+sendAndTrack(context,bridge,text)
 refreshWidget()
 }
 }

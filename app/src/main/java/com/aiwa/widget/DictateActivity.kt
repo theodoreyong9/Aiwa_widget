@@ -46,7 +46,7 @@ class DictateActivity : ComponentActivity() {
             // real implementation both this and MainActivity call, so
             // that drift can't happen again.
             CoroutineScope(Dispatchers.Default).launch {
-                sendAndTrack(LocalClaudeBridge(), heard)
+                sendAndTrack(appContext, LocalClaudeBridge(), heard)
                 AiwaWidget().updateAll(appContext)
             }
         }
