@@ -32,9 +32,11 @@ data class AiwaState(
     val model: String? = null,
     val backendVersion: Int = 0,
     val status: Status = Status.READY,
-    // What was sent, and where the answer is (cloud replies can't be read
-    // back by a program — see aiwa_server.py).
-    val output: String = "",
+    // The last problem worth telling the user about, shown in the app only
+    // (the widget has no message area: its errors are toasts). There is no
+    // conversation text at all: cloud replies can't be read back by a
+    // program (see aiwa_server.py), so they are read in the Claude app.
+    val notice: String? = null,
     val question: String? = null,
 ) {
     enum class Status { READY, WORKING, WAITING, DONE, ERROR }

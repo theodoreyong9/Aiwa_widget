@@ -107,26 +107,46 @@ def _ensure_cloud_repo():
         subprocess.run(["git", "-c", "user.name=aiwa", "-c", "user.email=aiwa@example.com", "commit", "-qm", "init"], cwd=CLOUD_DIR, check=True)
 
 
-def _run_with_pty(command, cwd, timeout):
+def _run_with_pty(command, cwd, timeout, stop_after_session_id=False):
     """Runs a command as if in a real terminal (creating a cloud session
     shows a live progress display, and that is how the manual test that
-    worked ran it). Returns (exit code, cleaned output, timed out)."""
+    worked ran it). Returns (exit code, cleaned output, reason it ended,
+    timeline).
+
+    stop_after_session_id: `claude --cloud "task"` most likely stays open
+    like a normal Claude after creating the session (Anthropic's wording:
+    "the task runs in the cloud while you continue working locally"), so
+    waiting for it to exit meant waiting out the whole timeout — reported
+    live as the session taking far too long to appear compared with the
+    manual test. Once a session id has appeared and the output has gone
+    quiet for a few seconds, the session exists: stop the CLI."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 200, 0, 0))
     env = dict(os.environ)
     if env.get("TERM", "dumb") in ("", "dumb"):
         env["TERM"] = "xterm-256color"
+    start = time.time()
+    timeline = []
+
+    def mark(what):
+        timeline.append(f"{time.time() - start:5.1f}s {what}")
+
     proc = subprocess.Popen(command, cwd=cwd, env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True, start_new_session=True)
     os.close(slave)
+    mark("started")
     chunks = []
-    deadline = time.time() + timeout
-    timed_out = False
+    reason = "exited"
+    found_at = None
+    last_data = start
     try:
         while True:
-            left = deadline - time.time()
+            now = time.time()
+            left = start + timeout - now
             if left <= 0:
-                timed_out = True
-                proc.kill()
+                reason = "timeout"
+                break
+            if stop_after_session_id and found_at is not None and (now - last_data >= 4 or now - found_at >= 25):
+                reason = "stopped after the session id appeared"
                 break
             ready, _, _ = select.select([master], [], [], min(left, 1.0))
             if ready:
@@ -136,22 +156,39 @@ def _run_with_pty(command, cwd, timeout):
                     break
                 if not data:
                     break
+                if not chunks:
+                    mark("first output")
                 chunks.append(data)
+                last_data = time.time()
+                if stop_after_session_id and found_at is None:
+                    if CLOUD_ID_RE.search(_clean(b"".join(chunks).decode("utf-8", "replace"))):
+                        found_at = last_data
+                        mark("session id seen")
             elif proc.poll() is not None:
                 break
     finally:
+        if reason != "exited" and proc.poll() is None:
+            proc.terminate()
         os.close(master)
     try:
-        code = proc.wait(timeout=5)
+        code = proc.wait(timeout=3)
     except subprocess.TimeoutExpired:
         proc.kill()
         code = proc.wait()
-    return code, _clean(b"".join(chunks).decode("utf-8", "replace")), timed_out
+    if reason != "exited":
+        # `script` may leave the CLI it started running; nothing else
+        # runs a cloud command while this one holds cloud_busy.
+        subprocess.run(["pkill", "-f", "[c]laude .*--cloud"], capture_output=True)
+    mark(f"ended: {reason} (exit {code})")
+    return code, _clean(b"".join(chunks).decode("utf-8", "replace")), reason, timeline
 
 
-def _log_cloud(kind, command, code, output):
+def _log_cloud(kind, command, code, output, timeline=()):
     try:
-        CLOUD_LOG.write_text(f"[{_ts()}] {kind} exit={code}\n$ {shlex.join(command)}\n\n{output}\n", encoding="utf-8")
+        CLOUD_LOG.write_text(
+            f"[{_ts()}] {kind} exit={code}\n$ {shlex.join(command)}\n" + "\n".join(timeline) + f"\n\n{output}\n",
+            encoding="utf-8",
+        )
     except OSError:
         pass
 
@@ -240,8 +277,9 @@ def cloud_send(text):
         # controlling one (a bare pty has none, and a program that opens
         # /dev/tty then fails); without `script` it just gets the pty.
         run = ["script", "-q", "-e", "-c", shlex.join(command), "/dev/null"] if shutil.which("script") else command
-        code, output, timed_out = _run_with_pty(run, CLOUD_DIR, 180)
-        _log_cloud("create", run, code, output)
+        code, output, reason, timeline = _run_with_pty(run, CLOUD_DIR, 180, stop_after_session_id=True)
+        timed_out = reason == "timeout"
+        _log_cloud("create", run, code, output, timeline)
         ids = CLOUD_ID_RE.findall(output)
         found = next((i for i in ids if i.startswith("session_")), ids[0] if ids else None)
         url_match = CLOUD_URL_RE.search(output)
@@ -249,7 +287,7 @@ def cloud_send(text):
         if found is None and url:
             from_url = CLOUD_ID_RE.search(url)
             found = from_url.group(0) if from_url else None
-        print(f"[{_ts()}] cloud_send: created={found!r} code={code} timed_out={timed_out}", flush=True)
+        print(f"[{_ts()}] cloud_send: created={found!r} code={code} {timeline[-1]}", flush=True)
         if found is None:
             reason = "délai dépassé" if timed_out else f"aucun identifiant de session trouvé (code {code})"
             return {"ok": False, "error": reason + " — sortie : " + output.strip()[-600:]}

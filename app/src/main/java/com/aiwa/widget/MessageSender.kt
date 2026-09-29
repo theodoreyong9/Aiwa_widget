@@ -15,10 +15,9 @@ import kotlinx.coroutines.launch
  *
  * The message goes to the current Claude Code cloud session (a new one
  * when none is selected). Documented limit: the CLI only queues it — the
- * reply can't be read back — so Aiwa shows what was sent and says where
- * the answer is (a silent send would look like nothing happened). Refused
- * up front while another send is running, so a rejected message never
- * leaves an echo behind.
+ * reply can't be read back — so Aiwa shows no conversation at all: the
+ * exchange lives in the Claude app, one tap away ("Claude ↗"). Refused up
+ * front while another send is running.
  */
 suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, toastErrors: Boolean = false) {
     if (text.isBlank()) return
@@ -26,10 +25,7 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, t
         if (toastErrors) toastOnMain(context, "Un envoi est déjà en cours.")
         return
     }
-    AiwaRepository.update {
-        val separator = if (it.output.isBlank()) "" else "\n\n"
-        it.copy(status = AiwaState.Status.WORKING, output = it.output + separator + "🧑 $text")
-    }
+    AiwaRepository.update { it.copy(status = AiwaState.Status.WORKING, notice = null) }
     // Fire-and-forget: makes sure a widget composition is alive to show
     // the WORKING state and the result.
     CoroutineScope(Dispatchers.Default).launch { AiwaWidget().updateAll(context) }
@@ -48,9 +44,8 @@ suspend fun sendAndTrack(context: Context, bridge: ClaudeBridge, text: String, t
             else -> "[erreur: ${err.message}]"
         }
     }
-    val note = failure ?: "→ Envoyé. La réponse est dans l'appli Claude."
     AiwaRepository.update {
-        it.copy(status = if (failure == null) AiwaState.Status.DONE else AiwaState.Status.ERROR, output = it.output + "\n\n" + note)
+        it.copy(status = if (failure == null) AiwaState.Status.DONE else AiwaState.Status.ERROR, notice = failure)
     }
     if (toastErrors) toastOnMain(context, failure ?: "Envoyé — réponse dans l'appli Claude")
     BackendSync.refresh(bridge)

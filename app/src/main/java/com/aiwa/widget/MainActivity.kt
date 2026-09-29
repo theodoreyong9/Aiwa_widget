@@ -9,8 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,10 +25,9 @@ import kotlinx.coroutines.launch
 // the warm claude process every time for nothing.
 private var restartedOutdatedBackend=false
 class MainActivity:ComponentActivity(){override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);setContent{MaterialTheme{AiwaScreen()}}}}
-// "Travail…" alone left every message looking stuck for the first
-// 20-30s (claude's real, confirmed cold-start delay before its first
-// token) — this sets the right expectation instead of looking hung.
-private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Travail… (jusqu'à 30s, patiente)";AiwaState.Status.WAITING->"En attente de réponse";AiwaState.Status.DONE->"Terminé";AiwaState.Status.ERROR->"Erreur"}
+// Creating a cloud session takes a few seconds; the reply itself is never
+// shown here (it lives in the Claude app), so DONE says where to read it.
+private fun statusLabel(status:AiwaState.Status):String=when(status){AiwaState.Status.READY->"Prêt";AiwaState.Status.WORKING->"Envoi en cours…";AiwaState.Status.WAITING->"En attente";AiwaState.Status.DONE->"Envoyé — la réponse est dans l'appli Claude";AiwaState.Status.ERROR->"Erreur"}
 @Composable private fun AiwaScreen(){
 val context=LocalContext.current
 val bridge=remember{LocalClaudeBridge()}
@@ -50,7 +47,7 @@ fun refreshWidget(){scope.launch{AiwaWidget().updateAll(context)}}
 fun doSend(text:String){
 // Reported live: "quand je passe du widget à l'app il y a un
 // décalage... la réponse concerne l'avant-dernier input" — root cause:
-// this used to reset status/output to WORKING/"" HERE, unconditionally,
+// this used to reset status to WORKING HERE, unconditionally,
 // before even knowing whether the send would be accepted — so a
 // busy-rejected attempt (a real request from elsewhere still in
 // flight) still wiped that real request's own in-progress display,
@@ -109,17 +106,16 @@ AiwaRepository.update{
 // own coroutine below); this only ever reports acceptance, so it
 // keeps status READY and lets the user just try sending — a
 // connection error there is the real, honest signal either way.
-// No "Termux démarré…" message on success any more: it overwrote
-// the transcript (and the history just loaded) on every app open,
-// and the user asked for no informational messages.
+// No "Termux démarré…" message on success: the user asked for no
+// informational messages.
 if(result.isSuccess)it.copy(status=AiwaState.Status.READY)
-else it.copy(status=AiwaState.Status.ERROR,output="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
+else it.copy(status=AiwaState.Status.ERROR,notice="Impossible de lancer Termux : ${result.exceptionOrNull()?.message}")
 }
 refreshWidget()
 }
 val termuxPermissionLauncher=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){granted->
 if(granted)launchTermuxBackend()
-else AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Permission Termux refusée — impossible de démarrer le backend automatiquement.")}
+else AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Permission Termux refusée — impossible de démarrer le backend automatiquement.")}
 }
 fun startTermuxBackend(){
 val granted=ContextCompat.checkSelfPermission(context,"com.termux.permission.RUN_COMMAND")==PackageManager.PERMISSION_GRANTED
@@ -178,9 +174,9 @@ awaitBackendStatus(bridge,30_000)
 BackendSync.refresh(bridge)
 val versionNow=AiwaRepository.state.value.backendVersion
 if(backendStatus==null){
-AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois.")}
+AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois.")}
 }else if(versionNow<EXPECTED_BACKEND_VERSION){
-AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,output="Backend obsolète (version $versionNow, il faut $EXPECTED_BACKEND_VERSION) et mise à jour automatique impossible. Dans Termux : cd ~/aiwa_widget && git pull && pkill -f aiwa_server.py, puis rouvre Aiwa.")}
+AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Backend obsolète (version $versionNow, il faut $EXPECTED_BACKEND_VERSION) et mise à jour automatique impossible. Dans Termux : cd ~/aiwa_widget && git pull && pkill -f aiwa_server.py, puis rouvre Aiwa.")}
 }
 }
 Column(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
@@ -200,7 +196,15 @@ DropdownMenuItem(text={Text("Nouvelle session")},onClick={
 sessionMenuExpanded=false
 scope.launch{switchCloud(context,bridge,"new")}
 })
-DropdownMenuItem(text={Text("Ajouter une session (lien copié)")},onClick={
+for(c in state.cloudSessions){
+DropdownMenuItem(text={Text(c.title)},onClick={
+sessionMenuExpanded=false
+scope.launch{switchCloud(context,bridge,c.id)}
+})
+}
+// The CLI can't list the account's cloud sessions, so one made
+// elsewhere is added by its link (last entry: the rarely used one).
+DropdownMenuItem(text={Text("Ajouter une session existante (lien copié)")},onClick={
 sessionMenuExpanded=false
 val copied=clipboardText(context)
 if(copied==null||!CLOUD_ID_IN_TEXT.containsMatchIn(copied)){
@@ -209,24 +213,22 @@ toastOnMain(context,"Aucun lien de session Claude dans le presse-papiers : copie
 scope.launch{addCloudSession(context,bridge,copied)}
 }
 })
-for(c in state.cloudSessions){
-DropdownMenuItem(text={Text(c.title)},onClick={
-sessionMenuExpanded=false
-scope.launch{switchCloud(context,bridge,c.id)}
-})
-}
 }
 }
 Text(statusLabel(state.status))
-// Reported live: "pourquoi je ne vois pas le texte total de la
-// session en scroll" — output now accumulates the real conversation
-// transcript (see sendAndTrack), but a plain Text with no scroll
-// modifier just clips anything past the screen. weight(1f) lets this
-// take whatever space the header/status/input/buttons around it
-// don't use, and verticalScroll makes long text actually scrollable.
-Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())){
-Text(state.output.ifBlank{"La réponse Claude apparaîtra ici."})
+// No conversation here or in the widget: a cloud session's replies can't
+// be read back by a program, so they are read in the Claude app. This
+// button (only once a session exists) is the way there.
+val notice=state.notice
+if(notice!=null){
+Text(notice,color=MaterialTheme.colorScheme.error)
+}else if(state.cloudSessionId==null){
+Text("La conversation s'affiche dans l'appli Claude : envoie un message pour créer la session.")
 }
+if(state.cloudSessionId!=null){
+Button(onClick={if(!openClaudeApp(context))toastOnMain(context,"Impossible d'ouvrir l'appli Claude.")}){Text("Ouvrir Claude ↗")}
+}
+Spacer(Modifier.weight(1f))
 // The explicit button here became redundant once LaunchedEffect above
 // started firing the same launch automatically on every app open —
 // reported live as a fair "might as well remove it" once that was

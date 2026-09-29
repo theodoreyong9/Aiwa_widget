@@ -1,6 +1,4 @@
 package com.aiwa.widget
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -80,17 +78,13 @@ class SessionPickerActivity : ComponentActivity() {
             LaunchedEffect(Unit) { BackendSync.refresh(LocalClaudeBridge()) }
             val entries = buildList {
                 add(PickerEntry("+  Nouvelle session", state.cloudSessionId == null) { pickCloud("new") })
-                val openId = state.cloudSessionId
-                if (openId != null) {
-                    val url = state.cloudSessions.find { it.id == openId }?.url
-                    add(PickerEntry("↗  Ouvrir dans l'appli Claude", false) { openInClaudeApp(openId, url) })
-                }
-                // The CLI can't list existing cloud sessions, so one made
-                // elsewhere is added by pasting its link.
-                add(PickerEntry("⎘  Ajouter une session (lien copié)", false) { addFromClipboard() })
                 state.cloudSessions.forEach { c ->
                     add(PickerEntry(c.title.take(60), c.id == state.cloudSessionId) { pickCloud(c.id) })
                 }
+                // The CLI has no command to list the account's cloud
+                // sessions, so one made elsewhere is added by pasting its
+                // link (last entry: the rarely used one).
+                add(PickerEntry("⎘  Ajouter une session existante (lien copié)", false) { addFromClipboard() })
             }
             PickerSheet(entries) { finish() }
         }
@@ -115,18 +109,6 @@ class SessionPickerActivity : ComponentActivity() {
         val appContext = applicationContext
         finish()
         CoroutineScope(Dispatchers.Default).launch { addCloudSession(appContext, LocalClaudeBridge(), text) }
-    }
-
-    // Cloud replies are read in the Claude app (the CLI can't return them
-    // to Aiwa), so this is how you get from Aiwa to the answer.
-    private fun openInClaudeApp(sessionId: String, url: String?) {
-        val target = url?.takeIf { it.startsWith("https://claude.ai/") } ?: "https://claude.ai/code/$sessionId"
-        try {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target)))
-        } catch (err: Exception) {
-            toastOnMain(this, "Impossible d'ouvrir le lien : ${err.message}")
-        }
-        finish()
     }
 }
 

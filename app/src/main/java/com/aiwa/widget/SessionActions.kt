@@ -1,6 +1,9 @@
 package com.aiwa.widget
+import android.content.ActivityNotFoundException
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -41,17 +44,12 @@ fun clipboardText(context: Context): String? {
  * picker and the app's dropdown (a duplicated copy would drift, as
  * sendAndTrack's once did). It only ASKS the backend, then re-reads the
  * backend's real state — never a local guess. target "new" = the next
- * message creates a session, otherwise the id of an existing one. The
- * transcript here is only what Aiwa sent (cloud replies can't be read
- * back), so it is cleared on a real change.
+ * message creates a session, otherwise the id of an existing one.
  */
 suspend fun switchCloud(context: Context, bridge: ClaudeBridge, target: String) {
     try {
         bridge.selectCloud(target)
-        AiwaRepository.update {
-            val same = if (target == "new") it.cloudSessionId == null else it.cloudSessionId == target
-            if (same) it else it.copy(output = "")
-        }
+        AiwaRepository.update { it.copy(notice = null) }
     } catch (err: BusyException) {
         // Nothing to do: the refresh below shows what is real.
     } catch (err: Exception) {
@@ -65,7 +63,7 @@ suspend fun switchCloud(context: Context, bridge: ClaudeBridge, target: String) 
 suspend fun addCloudSession(context: Context, bridge: ClaudeBridge, link: String) {
     try {
         bridge.addCloud(link)
-        AiwaRepository.update { it.copy(output = "") }
+        AiwaRepository.update { it.copy(notice = null) }
     } catch (err: Exception) {
         toastOnMain(context, describeFailure(context, err, "ajouter la session"))
     }
@@ -84,4 +82,33 @@ suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
+}
+
+private const val CLAUDE_APP_PACKAGE = "com.anthropic.claude"
+
+/**
+ * Opens the current cloud session where its conversation actually lives:
+ * the Claude app (Code tab). Aiwa can't show cloud replies itself, so this
+ * is the one way to read them. The app is asked first (it may claim
+ * claude.ai/code links); without it, whatever handles the link — the
+ * browser — gets it. Returns false when there is no session to open or
+ * nothing could open the link.
+ */
+fun openClaudeApp(context: Context): Boolean {
+    val state = AiwaRepository.state.value
+    val sessionId = state.cloudSessionId ?: return false
+    val url = state.cloudSessions.find { it.id == sessionId }?.url
+    val target = Uri.parse(url?.takeIf { it.startsWith("https://claude.ai/") } ?: "https://claude.ai/code/$sessionId")
+    fun view() = Intent(Intent.ACTION_VIEW, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    return try {
+        context.startActivity(view().setPackage(CLAUDE_APP_PACKAGE))
+        true
+    } catch (err: ActivityNotFoundException) {
+        try {
+            context.startActivity(view())
+            true
+        } catch (err2: ActivityNotFoundException) {
+            false
+        }
+    }
 }
