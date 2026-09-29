@@ -7,7 +7,3 @@ captures/
 .externalNativeBuild/
 .cxx/
 *.apk
-# The one exception: CI commits the latest debug build here on every
-# push to main (see .github/workflows/build-apk.yml) so it's directly
-# downloadable from the repo root instead of only as a CI artifact.
-!/aiwa-debug.apk
