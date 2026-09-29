@@ -139,11 +139,11 @@ suspend fun switchOptions(
     context: Context,
     bridge: ClaudeBridge,
     pushMain: Boolean? = null,
-    autodeploy: Boolean? = null,
+    deploy: String? = null,
     extra: String? = null,
 ) {
     try {
-        bridge.setOptions(pushMain, autodeploy, extra)
+        bridge.setOptions(pushMain, deploy, extra)
     } catch (err: Exception) {
         toastOnMain(context, describeFailure(context, err, "Impossible de changer les consignes"))
     }

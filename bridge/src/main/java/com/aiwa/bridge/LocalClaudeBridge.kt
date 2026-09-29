@@ -72,11 +72,12 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             lastSession = json.str("last_session"),
             repo = json.str("repo"),
             pushMain = json.optBoolean("push_main", true),
-            autodeploy = json.optBoolean("autodeploy", false),
+            // An older backend only says yes/no: yes was GitHub Pages.
+            deploy = json.str("deploy") ?: if (json.optBoolean("autodeploy", false)) "pages" else "none",
             extra = json.str("extra") ?: "",
             waiting = json.optBoolean("waiting", false),
             alertLast = if (json.isNull("alert_last")) null else json.optLong("alert_last"),
-            site = SiteInfo(site?.str("url"), site?.str("state") ?: "off"),
+            site = SiteInfo(site?.str("url"), site?.str("state") ?: "off", site?.str("kind") ?: "site"),
             ci = run?.let { CiInfo(it.str("state") ?: "none", it.str("url"), it.optBoolean("fresh", false)) },
             githubError = json.str("github_error"),
         )
@@ -171,10 +172,10 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     }
 
     // Only the options that are not null are changed.
-    override suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, extra: String?) = withContext(Dispatchers.IO) {
+    override suspend fun setOptions(pushMain: Boolean?, deploy: String?, extra: String?) = withContext(Dispatchers.IO) {
         val body = JSONObject()
         if (pushMain != null) body.put("push_main", pushMain)
-        if (autodeploy != null) body.put("autodeploy", autodeploy)
+        if (deploy != null) body.put("deploy", deploy)
         if (extra != null) body.put("extra", extra)
         requireAccepted(postText("/api/options", body.toString()))
     }

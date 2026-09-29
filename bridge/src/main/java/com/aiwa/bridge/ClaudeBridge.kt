@@ -1,8 +1,9 @@
 package com.aiwa.bridge
 
-// state: off (no deployment asked), waiting (the Pages address doesn't
-// answer yet) or live.
-data class SiteInfo(val url: String?, val state: String)
+// state: off (no repository), waiting (the address doesn't answer yet) or live.
+// kind: "site" (the GitHub Pages address) or "apk" (the download address of the
+// Android APK, in the Android deploy mode).
+data class SiteInfo(val url: String?, val state: String, val kind: String = "site")
 
 // state: running, success, failure or none.
 // fresh: a new green run the user has not been told about yet.
@@ -19,7 +20,8 @@ data class BackendStatus(
     val lastSession: String? = null,
     val repo: String? = null,
     val pushMain: Boolean = true,
-    val autodeploy: Boolean = false,
+    // none / pages (GitHub Pages) / android (the APK as a GitHub release).
+    val deploy: String = "none",
     val extra: String = "",
     // Claude pinged the relay: it is waiting for an answer. alertLast: epoch
     // seconds of the last ping ever received (null = never).
@@ -49,7 +51,7 @@ interface ClaudeBridge {
 
     // The instructions integrated into the conversation. Only the ones that
     // are not null are changed.
-    suspend fun setOptions(pushMain: Boolean?, autodeploy: Boolean?, extra: String?)
+    suspend fun setOptions(pushMain: Boolean?, deploy: String?, extra: String?)
 
     // The user went to look at the latest Actions run: it is no longer news.
     suspend fun ciSeen()

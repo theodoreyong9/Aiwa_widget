@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 13
+const val EXPECTED_BACKEND_VERSION = 14
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -70,7 +70,8 @@ data class AiwaState(
     // off / waiting / live (whether the Pages address answers).
     val repo: String? = null,
     val pushMain: Boolean = true,
-    val autodeploy: Boolean = false,
+    // none / pages (GitHub Pages) / android (the APK as a GitHub release).
+    val deploy: String = "none",
     val extra: String = "",
     // Claude pinged the relay: it waits for an answer (the widget shows it).
     // alertAt: epoch seconds of the last ping ever received, null = never.
@@ -79,6 +80,8 @@ data class AiwaState(
     val effort: String? = null,
     val siteUrl: String? = null,
     val siteState: String = "off",
+    // "site" or "apk": what siteUrl is (see SiteInfo).
+    val siteKind: String = "site",
     // The latest GitHub Actions run of the repository: running / success /
     // failure / none, with the link to that run (null = unknown).
     val ciState: String? = null,
@@ -151,10 +154,11 @@ object AiwaRepository {
                     effort = text("effort"),
                     repo = text("repo"),
                     pushMain = json.optBoolean("pushMain", true),
-                    autodeploy = json.optBoolean("autodeploy", false),
+                    deploy = text("deploy") ?: if (json.optBoolean("autodeploy", false)) "pages" else "none",
                     extra = text("extra") ?: "",
                     siteUrl = text("siteUrl"),
                     siteState = text("siteState") ?: "off",
+                    siteKind = text("siteKind") ?: "site",
                     ciState = text("ciState"),
                     ciUrl = text("ciUrl"),
                 )
@@ -170,8 +174,8 @@ object AiwaRepository {
         val json = JSONObject()
             .put("session", s.session).put("cloud", s.cloudSessionId).put("last", s.lastSessionId)
             .put("model", s.model).put("effort", s.effort).put("repo", s.repo)
-            .put("pushMain", s.pushMain).put("autodeploy", s.autodeploy).put("extra", s.extra)
-            .put("siteUrl", s.siteUrl).put("siteState", s.siteState).put("ciState", s.ciState).put("ciUrl", s.ciUrl)
+            .put("pushMain", s.pushMain).put("deploy", s.deploy).put("extra", s.extra)
+            .put("siteUrl", s.siteUrl).put("siteState", s.siteState).put("siteKind", s.siteKind).put("ciState", s.ciState).put("ciUrl", s.ciUrl)
         val sessions = JSONArray()
         s.cloudSessions.forEach { c ->
             sessions.put(JSONObject().put("id", c.id).put("title", c.title).put("url", c.url).put("repo", c.repo))

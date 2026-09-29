@@ -71,11 +71,27 @@ def pages_url(repo):
     return f"https://{host}/" if name.lower() == host else f"https://{host}/{name}/"
 
 
-def site_answers(url):
+APK_TAG = "android-latest"
+
+
+def apk_url(repo):
+    """Where the Android APK of a repository is published: a file of the one
+    rolling GitHub release tagged android-latest, named after the repository —
+    known in advance, like the Pages address, and stable from one build to the
+    next (nothing is committed to the repository)."""
+    owner, name = repo.split("/", 1)
+    return f"https://github.com/{owner}/{name}/releases/download/{APK_TAG}/{name}.apk"
+
+
+def site_answers(url, ranged=False):
     """Whether the address answers with a success — a plain web request,
-    no GitHub credentials involved."""
+    no GitHub credentials involved. ranged: ask for a single byte, for a
+    file (the APK) that must not be downloaded just to know it exists."""
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "aiwa"})
+        headers = {"User-Agent": "aiwa"}
+        if ranged:
+            headers["Range"] = "bytes=0-0"
+        request = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(request, timeout=8) as reply:
             return 200 <= reply.status < 300
     except (OSError, ValueError):

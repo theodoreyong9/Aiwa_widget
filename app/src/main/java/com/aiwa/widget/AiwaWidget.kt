@@ -101,6 +101,14 @@ private fun fitLabel(text: String, room: Float, fontScale: Float): String {
     return if (out.isEmpty()) "…" else "$out…"
 }
 
+// The Deploy chip cycles none → pages → android → none at each tap.
+private fun deployLabel(mode: String) = when (mode) {
+    "pages" -> "Deploy ●"
+    "android" -> "Android ●"
+    else -> "Deploy ○"
+}
+
+
 // Every button of the widget is one of these two shapes (34 dp high in the
 // compact layout, sized to the room in the full one).
 @Composable
@@ -210,13 +218,13 @@ private fun FullContent(state: AiwaState) {
     // The address is known as soon as a repository is chosen
     // (https://<owner>.github.io/<repo>/): the globe is there once deployment is
     // asked for, or as soon as the address answers.
-    val showSite = hasRepo && !fresh && site != null && (state.autodeploy || live)
-    val showActions = hasRepo && !fresh && (state.autodeploy || state.ciState != null)
+    val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
+    val showActions = hasRepo && !fresh && (state.deploy != "none" || state.ciState != null)
     val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
     val each = (avail - fixed - GAP) / 2f - 20f
     fun pick(full: String, short: String) = if (textWidth(full, fontScale) <= each) full else short
     val pushText = fitLabel(pick(if (state.pushMain) "Push main" else "Push branche", if (state.pushMain) "main" else "branche"), each, fontScale)
-    val deployText = fitLabel(if (state.autodeploy) "Deploy ●" else "Deploy ○", each, fontScale)
+    val deployText = fitLabel(deployLabel(state.deploy), each, fontScale)
 
     Column(
         modifier = GlanceModifier.fillMaxSize()
@@ -267,7 +275,7 @@ private fun FullContent(state: AiwaState) {
             Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
                 Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
                 Spacer(GlanceModifier.width(GAP.dp))
-                Chip(deployText, if (state.autodeploy) green else pill, fg, actionRunCallback<ToggleAutodeployCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
+                Chip(deployText, if (state.deploy != "none") green else pill, fg, actionRunCallback<CycleDeployCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
                 if (fresh) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true, height = chipH.dp)
@@ -276,8 +284,8 @@ private fun FullContent(state: AiwaState) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     // Orange = the address answers; grey = not (yet) — it still opens.
                     RoundButton(
-                        icon = R.drawable.ic_globe,
-                        description = "Ouvrir le site",
+                        icon = if (state.siteKind == "apk") R.drawable.ic_download else R.drawable.ic_globe,
+                        description = if (state.siteKind == "apk") "Télécharger l'APK Android" else "Ouvrir le site",
                         background = if (live) claudeOrange else pill,
                         action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site))),
                         diameter = chipH.dp,
@@ -427,7 +435,7 @@ private fun CompactContent(state: AiwaState) {
             // conversation — Claude Code does the work itself.
             val hasRepo = state.repo != null
             val pushText = if (state.pushMain) "Push main" else "Push branche"
-            val deployText = if (state.autodeploy) "Deploy ●" else "Deploy ○"
+            val deployText = deployLabel(state.deploy)
             val readyText = "● Prêt ↗"
             val site = state.siteUrl
             val live = state.siteState == "live"
@@ -437,8 +445,8 @@ private fun CompactContent(state: AiwaState) {
             // The address is known as soon as a repository is chosen
             // (https://<owner>.github.io/<repo>/): the globe is there once
             // deployment is asked for, or as soon as the address answers.
-            val showSite = hasRepo && !fresh && site != null && (state.autodeploy || live)
-            val showActions = hasRepo && !fresh && (state.autodeploy || state.ciState != null)
+            val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
+            val showActions = hasRepo && !fresh && (state.deploy != "none" || state.ciState != null)
             var others = 0f
             if (hasRepo) others += GAP + chipWidth(pushText, fontScale) + GAP + chipWidth(deployText, fontScale)
             if (hasRepo && fresh) others += GAP + chipWidth(readyText, fontScale)
@@ -456,7 +464,7 @@ private fun CompactContent(state: AiwaState) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>())
                     Spacer(GlanceModifier.width(GAP.dp))
-                    Chip(deployText, if (state.autodeploy) green else pill, fg, actionRunCallback<ToggleAutodeployCallback>())
+                    Chip(deployText, if (state.deploy != "none") green else pill, fg, actionRunCallback<CycleDeployCallback>())
                     if (fresh) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true)
@@ -465,8 +473,8 @@ private fun CompactContent(state: AiwaState) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         // Orange = the address answers; grey = not (yet) — it still opens.
                         RoundButton(
-                            icon = R.drawable.ic_globe,
-                            description = "Ouvrir le site",
+                            icon = if (state.siteKind == "apk") R.drawable.ic_download else R.drawable.ic_globe,
+                            description = if (state.siteKind == "apk") "Télécharger l'APK Android" else "Ouvrir le site",
                             background = if (live) claudeOrange else pill,
                             action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site))),
                         )
@@ -492,15 +500,20 @@ private fun CompactContent(state: AiwaState) {
     }
 }
 
-// The widget's "Push" and "Deploy" buttons flip an instruction without opening anything.
+// The widget's "Push" (main / branch) and "Deploy" (none / GitHub Pages / Android) buttons change an instruction without opening anything.
 class TogglePushMainCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         switchOptions(context, LocalClaudeBridge(), pushMain = !AiwaRepository.state.value.pushMain)
     }
 }
 
-class ToggleAutodeployCallback : ActionCallback {
+class CycleDeployCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        switchOptions(context, LocalClaudeBridge(), autodeploy = !AiwaRepository.state.value.autodeploy)
+        val next = when (AiwaRepository.state.value.deploy) {
+            "none" -> "pages"
+            "pages" -> "android"
+            else -> "none"
+        }
+        switchOptions(context, LocalClaudeBridge(), deploy = next)
     }
 }

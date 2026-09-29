@@ -206,8 +206,12 @@ class RepoPickerActivity : ComponentActivity() {
                     list.forEach { r ->
                         add(PickerEntry(r.name + if (r.isPrivate) "  (privé)" else "", r.name == state.repo) { pickRepo(r.name) })
                     }
-                    if (list.isEmpty()) add(PickerEntry("Aucun dépôt trouvé : ouvre Aiwa pour en saisir un", false) { finish() })
+                    if (list.isEmpty()) add(PickerEntry("Aucun dépôt trouvé", false) { })
                 }
+                // Claude Code reaches GitHub with ITS OWN connection, made in Claude's
+                // settings: Aiwa never logs in to GitHub. These two open that page.
+                add(PickerEntry("🔗  Connecter GitHub à Claude ↗", false) { openClaudeSettings(CLAUDE_CONNECT_GITHUB_URL) })
+                add(PickerEntry("⚙  Gérer ou déconnecter GitHub ↗", false) { openClaudeSettings(CLAUDE_CONNECTORS_URL) })
             }
             PickerSheet(entries) { finish() }
         }
@@ -218,4 +222,14 @@ class RepoPickerActivity : ComponentActivity() {
         finish()
         CoroutineScope(Dispatchers.Default).launch { switchRepo(appContext, LocalClaudeBridge(), repo) }
     }
+
+    private fun openClaudeSettings(url: String) {
+        if (!openUrl(applicationContext, url)) toastOnMain(applicationContext, "Impossible d'ouvrir le navigateur.")
+        finish()
+    }
 }
+
+// Where the user connects GitHub to the Claude account (starts the connection),
+// and the list of connectors, where GitHub can be disconnected.
+private const val CLAUDE_CONNECT_GITHUB_URL = "https://claude.ai/customize/connectors?auth_start=github&auth_start_force=1"
+private const val CLAUDE_CONNECTORS_URL = "https://claude.ai/customize/connectors"

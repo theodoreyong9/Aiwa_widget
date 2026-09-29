@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 13
+BACKEND_VERSION = 14
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -87,12 +87,14 @@ cloud_busy = False
 # Code does the work itself; these only tell it what the user wants:
 # current_repo: the repository new sessions start on ("owner/name"; None =
 # the plain chat); push_main: push straight to the main branch (otherwise
-# to a work branch); autodeploy: publish with GitHub Pages through GitHub
-# Actions; extra: free text. The alert instruction (ping the relay when you
+# to a work branch); deploy_mode: none, pages (publish with GitHub Pages
+# through GitHub Actions) or android (build the APK with GitHub Actions and
+# publish it as a GitHub release); extra: free text. The alert instruction (ping the relay when you
 # wait for an answer) is always there — it is mandatory, not a switch.
 current_repo = None
 push_main = True
-autodeploy = False
+DEPLOY_MODES = ("none", "pages", "android")
+deploy_mode = "none"
 extra = ""
 # None = the CLI's own default effort.
 current_effort = None
@@ -117,7 +119,7 @@ followup_lock = threading.Lock()
 
 
 def _load_state():
-    global current_model, current_cloud, current_repo, push_main, autodeploy, extra
+    global current_model, current_cloud, current_repo, push_main, deploy_mode, extra
     global current_effort, waiting_topic, last_cloud
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
@@ -132,7 +134,9 @@ def _load_state():
     last_cloud = last if isinstance(last, str) and CLOUD_ID_RE.fullmatch(last) else current_cloud
     current_repo = repo if isinstance(repo, str) and github.REPO_RE.fullmatch(repo) else None
     push_main = data.get("push_main") is not False
-    autodeploy = data.get("autodeploy") is True
+    mode = data.get("deploy")
+    # Older state files only knew a yes/no: yes was GitHub Pages.
+    deploy_mode = mode if mode in DEPLOY_MODES else ("pages" if data.get("autodeploy") is True else "none")
     text = data.get("extra")
     extra = text.strip()[:EXTRA_MAX] if isinstance(text, str) else ""
     effort = data.get("effort")
@@ -155,7 +159,7 @@ def _save_state():
     try:
         STATE_FILE.write_text(json.dumps({
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
-            "push_main": push_main, "autodeploy": autodeploy, "extra": extra,
+            "push_main": push_main, "deploy": deploy_mode, "extra": extra,
             "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud, "ci_seen": ci_seen,
         }), encoding="utf-8")
     except OSError as err:
@@ -349,7 +353,7 @@ def _instruction_lines(repo, work, base, direct):
     """What the user's switches ask of Claude Code, in words, as (key, text)
     pairs. Claude Code does all of it itself, with its own GitHub access."""
     with lock:
-        deploy, topic = autodeploy, waiting_topic
+        deploy, topic = deploy_mode, waiting_topic
     lines = []
     if repo:
         lines.append(("repo", f"Dépôt : {repo}. Ton répertoire de travail doit être ce dépôt GitHub (vérifie `git remote -v`) ; si ce n'est pas le cas, dis-le-moi et arrête-toi."))
@@ -372,13 +376,26 @@ def _instruction_lines(repo, work, base, direct):
                 f"N'intègre rien dans {base} et ne pousse pas dessus : tes changements s'accumulent sur ta branche et seront intégrés en entier "
                 "au prochain passage en intégration directe.",
             ))
-        if deploy:
+        if deploy == "pages":
             lines.append((
                 "deploy",
                 f"Déploiement : le site est publié par GitHub Pages via GitHub Actions, à l'adresse {github.pages_url(repo)}. "
                 "S'il n'y a pas encore de workflow Pages (actions/configure-pages, upload-pages-artifact, deploy-pages, déclenché à chaque push sur la branche principale), ajoute-le ; pas de branche gh-pages. "
                 f"Le déploiement ne se déclenche que par un push sur {base} : tant que ton travail n'y est pas intégré, rien n'est publié. "
                 "Si activer Pages avec la source « GitHub Actions » est hors de ta portée, dis-moi précisément le réglage à faire. Après un changement, vérifie que le déploiement a réussi.",
+            ))
+        elif deploy == "android":
+            name = repo.split("/", 1)[1]
+            lines.append((
+                "deploy",
+                "Déploiement (Android) : ce projet est une application Android, dont les APK se téléchargent depuis une release GitHub. "
+                f"Ajoute ou maintiens un workflow GitHub Actions qui, à chaque push sur {base}, compile l'APK de debug, le signe avec une clé de debug fixe "
+                "commitée dans le dépôt (sinon chaque APK est signé autrement et ne s'installe pas par-dessus le précédent), puis le publie comme fichier "
+                f"`{name}.apk` de la release GitHub de tag `{github.APK_TAG}` : une seule release, créée si elle n'existe pas et mise à jour à chaque build "
+                "(le fichier est remplacé, le tag déplacé sur le commit construit ; permissions `contents: write`). Ne commite pas l'APK dans le dépôt. "
+                f"Il doit être téléchargeable à l'adresse {github.apk_url(repo)}. "
+                f"Le déploiement ne se déclenche que par un push sur {base} : tant que ton travail n'y est pas intégré, rien n'est publié. "
+                "Si ce dépôt n'est pas un projet Android, dis-le-moi et ne fais rien. Après un changement, vérifie que le build a réussi et lis ses logs.",
             ))
         lines.append((
             "verify",
@@ -648,30 +665,33 @@ def cloud_send(text, command=False):
             cloud_busy = False
 
 
-def _site_probe(url):
-    answers = github.site_answers(url)
+def _site_probe(url, ranged=False):
+    answers = github.site_answers(url, ranged=ranged)
     with site_lock:
         site_cache.update(url=url, state="live" if answers else "waiting", at=time.time(), busy=False)
 
 
 def _site_snapshot():
-    """The GitHub Pages address of the current repository — known in
-    advance (https://<owner>.github.io/<repo>/) — and whether it answers:
-    off (no repository), waiting or live. Probed in the background; this is
-    called on every /api/status."""
+    """The address the user can open once a repository is chosen — known in
+    advance, and whether it answers: off (no repository), waiting or live.
+    kind "site": the GitHub Pages address (https://<owner>.github.io/<repo>/);
+    kind "apk": with the Android mode, the download address of the APK in the
+    rolling release. Probed in the background; this is called on every
+    /api/status."""
     with lock:
-        repo = current_repo
+        repo, mode = current_repo, deploy_mode
     if not repo:
-        return {"url": None, "state": "off"}
-    url = github.pages_url(repo)
+        return {"url": None, "state": "off", "kind": "site"}
+    kind = "apk" if mode == "android" else "site"
+    url = github.apk_url(repo) if kind == "apk" else github.pages_url(repo)
     with site_lock:
         fresh = site_cache["url"] == url
         state = site_cache["state"] if fresh else "waiting"
         ttl = 120 if state == "live" else 30
         if (not fresh or time.time() - site_cache["at"] > ttl) and not site_cache["busy"]:
             site_cache["busy"] = True
-            threading.Thread(target=_site_probe, args=(url,), daemon=True).start()
-    return {"url": url, "state": state}
+            threading.Thread(target=_site_probe, args=(url, kind == "apk"), daemon=True).start()
+    return {"url": url, "state": state, "kind": kind}
 
 
 def _ci_probe(repo):
@@ -810,13 +830,13 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 model, cloud_session = current_model, current_cloud
                 repo, direct, problem = current_repo, push_main, github_error
-                deploy, own, effort = autodeploy, extra, current_effort
+                deploy, own, effort = deploy_mode, extra, current_effort
             with waiting_lock:
                 is_waiting, last_ping = waiting["since"] is not None, waiting["last_ping"]
             self.reply_json({
                 "version": BACKEND_VERSION, "model": model, "effort": effort, "cloud_session": cloud_session,
                 "last_session": last_cloud or next((e.get("id") for e in _load_cloud_sessions() if e.get("id")), None),
-                "repo": repo, "push_main": direct, "autodeploy": deploy, "extra": own,
+                "repo": repo, "push_main": direct, "deploy": deploy, "autodeploy": deploy != "none", "extra": own,
                 "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "ci": _ci_snapshot(), "github_error": problem,
             })
@@ -830,7 +850,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_POST(self):
-        global current_model, current_cloud, current_repo, push_main, autodeploy, extra, current_effort, last_cloud
+        global current_model, current_cloud, current_repo, push_main, deploy_mode, extra, current_effort, last_cloud
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -949,8 +969,10 @@ class Handler(BaseHTTPRequestHandler):
                     if options["push_main"] != push_main and current_cloud:
                         retarget = current_cloud
                     push_main = options["push_main"]
-                if isinstance(options.get("autodeploy"), bool):
-                    autodeploy = options["autodeploy"]
+                if options.get("deploy") in DEPLOY_MODES:
+                    deploy_mode = options["deploy"]
+                elif isinstance(options.get("autodeploy"), bool):
+                    deploy_mode = "pages" if options["autodeploy"] else "none"
                 if isinstance(options.get("extra"), str):
                     extra = options["extra"].strip()[:EXTRA_MAX]
                 _save_state()
