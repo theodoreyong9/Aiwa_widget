@@ -209,9 +209,10 @@ class RepoPickerActivity : ComponentActivity() {
                     if (list.isEmpty()) add(PickerEntry("Aucun dépôt trouvé", false) { })
                 }
                 // Claude Code reaches GitHub with ITS OWN connection, made in Claude's
-                // settings: Aiwa never logs in to GitHub. These two open that page.
-                add(PickerEntry("🔗  Connecter GitHub à Claude ↗", false) { openClaudeSettings(CLAUDE_CONNECT_GITHUB_URL) })
-                add(PickerEntry("⚙  Gérer ou déconnecter GitHub ↗", false) { openClaudeSettings(CLAUDE_CONNECTORS_URL) })
+                // settings: Aiwa never logs in to GitHub and cannot tell whether it is
+                // connected. So ONE entry, which opens the page of Claude's connectors —
+                // it shows the real state and offers Connect or Disconnect accordingly.
+                add(PickerEntry("🔗  Connexion GitHub de Claude : connecter, changer, déconnecter ↗", false) { openClaudeSettings(CLAUDE_CONNECTORS_URL) })
             }
             PickerSheet(entries) { finish() }
         }
@@ -229,8 +230,6 @@ class RepoPickerActivity : ComponentActivity() {
     }
 }
 
-// Where the user connects GitHub to the Claude account (and installs the Claude
-// GitHub App on a repository), and the list of connectors, where GitHub can be
-// disconnected.
-private const val CLAUDE_CONNECT_GITHUB_URL = "https://claude.ai/connect-github"
+// Claude's list of connectors: GitHub is connected, switched to another account or
+// disconnected there, and the page shows which of those applies.
 private const val CLAUDE_CONNECTORS_URL = "https://claude.ai/customize/connectors"
