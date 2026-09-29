@@ -21,8 +21,9 @@ import com.aiwa.bridge.LocalClaudeBridge
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.sample
 
-// One compact row of buttons — [session ▾] [grey mic with a red
-// recording dot] [model ▾] and, once there is a session to read, [Claude ↗].
+// One compact row of buttons — [A: opens the Aiwa app] [session ▾] [grey
+// mic with a red recording dot] [model ▾] and, once there is a session to
+// read, [Claude ↗].
 // No conversation text: a cloud session's replies can't be read back by a
 // program, so they live in the Claude app and "Claude ↗" opens them. Each ▾
 // button opens a small floating picker window (Pickers.kt): a widget cannot
@@ -68,21 +69,31 @@ private fun Content(state: AiwaState) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Box(
+            modifier = GlanceModifier.size(36.dp)
+                .background(pill)
+                .cornerRadius(18.dp)
+                .clickable(actionStartActivity<MainActivity>()),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("A", style = TextStyle(color = fg, fontSize = 15.sp, fontWeight = FontWeight.Bold))
+        }
+        Spacer(GlanceModifier.width(6.dp))
         Text(
             text = "$sessionLabel  ▾",
-            style = TextStyle(color = fg, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+            style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
             maxLines = 1,
             modifier = GlanceModifier.defaultWeight()
                 .background(pill)
                 .cornerRadius(20.dp)
-                .padding(horizontal = 14.dp, vertical = 11.dp)
+                .padding(horizontal = 11.dp, vertical = 11.dp)
                 .clickable(actionStartActivity<SessionPickerActivity>()),
         )
-        Spacer(GlanceModifier.width(8.dp))
+        Spacer(GlanceModifier.width(6.dp))
         Box(
-            modifier = GlanceModifier.size(44.dp)
+            modifier = GlanceModifier.size(40.dp)
                 .background(micGrey)
-                .cornerRadius(22.dp)
+                .cornerRadius(20.dp)
                 .clickable(actionStartActivity<DictateActivity>()),
             contentAlignment = Alignment.Center,
         ) {
@@ -92,29 +103,29 @@ private fun Content(state: AiwaState) {
                 modifier = GlanceModifier.size(16.dp),
             )
         }
-        Spacer(GlanceModifier.width(8.dp))
+        Spacer(GlanceModifier.width(6.dp))
         Text(
             text = modelLabel(state.model) + "  ▾",
-            style = TextStyle(color = fg, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+            style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
             maxLines = 1,
             modifier = GlanceModifier
                 .background(pill)
                 .cornerRadius(20.dp)
-                .padding(horizontal = 14.dp, vertical = 11.dp)
+                .padding(horizontal = 11.dp, vertical = 11.dp)
                 .clickable(actionStartActivity<ModelPickerActivity>()),
         )
         // Only once a session exists (Aiwa has created or selected one):
         // before that there is nothing to open.
         if (state.cloudSessionId != null) {
-            Spacer(GlanceModifier.width(8.dp))
+            Spacer(GlanceModifier.width(6.dp))
             Text(
                 text = "Claude ↗",
-                style = TextStyle(color = fg, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium),
                 maxLines = 1,
                 modifier = GlanceModifier
                     .background(claudeOrange)
                     .cornerRadius(20.dp)
-                    .padding(horizontal = 14.dp, vertical = 11.dp)
+                    .padding(horizontal = 11.dp, vertical = 11.dp)
                     .clickable(actionStartActivity<OpenClaudeActivity>()),
             )
         }

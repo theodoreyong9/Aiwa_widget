@@ -22,6 +22,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import termios
@@ -39,9 +40,10 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 4
-# Passed to `claude --model` when a new cloud session is created. Kept
-# restrictive: it ends up as a command-line argument.
+BACKEND_VERSION = 5
+# Passed to `claude --model` when a new cloud session is created, and to
+# `/model` in an existing one. Kept restrictive: it ends up as a
+# command-line argument / slash-command argument.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
 
 # A cloud session needs a git repository to start from. Documented: a
@@ -68,6 +70,9 @@ current_model = None
 current_cloud = None
 cloud_busy = False
 store_lock = threading.Lock()
+# Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
+# that follows a creation, for instance).
+followup_lock = threading.Lock()
 
 
 def _load_state():
@@ -105,6 +110,13 @@ def _ensure_cloud_repo():
         (CLOUD_DIR / "README.md").write_text("chat\n", encoding="utf-8")
         subprocess.run(["git", "add", "."], cwd=CLOUD_DIR, check=True)
         subprocess.run(["git", "-c", "user.name=aiwa", "-c", "user.email=aiwa@example.com", "commit", "-qm", "init"], cwd=CLOUD_DIR, check=True)
+
+
+def _signal_group(proc, sig):
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        pass
 
 
 def _run_with_pty(command, cwd, timeout, stop_after_session_id=False):
@@ -168,7 +180,7 @@ def _run_with_pty(command, cwd, timeout, stop_after_session_id=False):
                 break
     finally:
         if reason != "exited" and proc.poll() is None:
-            proc.terminate()
+            _signal_group(proc, signal.SIGTERM)
         os.close(master)
     try:
         code = proc.wait(timeout=3)
@@ -176,9 +188,11 @@ def _run_with_pty(command, cwd, timeout, stop_after_session_id=False):
         proc.kill()
         code = proc.wait()
     if reason != "exited":
-        # `script` may leave the CLI it started running; nothing else
-        # runs a cloud command while this one holds cloud_busy.
-        subprocess.run(["pkill", "-f", "[c]laude .*--cloud"], capture_output=True)
+        # `script` may leave the CLI it started running. It was started in
+        # its own session, so its whole group can be killed without
+        # touching any other `claude` process (a follow-up running at the
+        # same time, for instance).
+        _signal_group(proc, signal.SIGKILL)
     mark(f"ended: {reason} (exit {code})")
     return code, _clean(b"".join(chunks).decode("utf-8", "replace")), reason, timeline
 
@@ -243,40 +257,69 @@ def cloud_add(text):
     return session_id
 
 
-def cloud_send(text):
+def _queue_followup(session_id, text):
+    """Queues one message into an existing cloud session
+    (`claude -p --cloud <id>`). Returns {"ok", "url", "error"}."""
+    command = ["claude", "-p", "--cloud", session_id, "--output-format", "json"]
+    with followup_lock:
+        done = subprocess.run(command, input=text, capture_output=True, text=True, timeout=90)
+    output = _clean((done.stdout or "") + (done.stderr or ""))
+    _log_cloud("follow-up", command, done.returncode, output)
+    data = _last_json_object(output)
+    if data is not None:
+        ok, url, error = data.get("ok") is True, data.get("url"), data.get("error")
+    else:
+        ok, url, error = done.returncode == 0, None, None
+    if not ok:
+        error = error or output.strip()[-600:] or f"code {done.returncode}"
+    return {"ok": ok, "url": url, "error": error}
+
+
+def _rename_session(session_id, title):
+    """Claude names a cloud session itself, and the CLI can't read that name
+    back — so Aiwa imposes its own: the name Aiwa shows is sent to the
+    session with `/rename`, which cloud sessions document as taking its
+    value as an argument. Best effort, in the background."""
+    try:
+        result = _queue_followup(session_id, f"/rename {title}")
+        print(f"[{_ts()}] rename {session_id[:16]}: ok={result['ok']} {result['error'] or ''}", flush=True)
+    except (OSError, subprocess.SubprocessError) as err:
+        print(f"[{_ts()}] rename failed: {err}", flush=True)
+
+
+def cloud_send(text, command=False):
     """Sends one message to the current cloud session — creating a new
     one when none is selected. Synchronous: creating a session can take a
-    while, the cloud machine has to start."""
+    while, the cloud machine has to start.
+
+    command=True: `text` is a slash command for the CURRENT session (e.g.
+    `/model opus`); it never creates a session and leaves the session's
+    name and rank in the list alone."""
     global current_cloud, cloud_busy
     with lock:
         if cloud_busy:
             return {"ok": False, "error": "busy"}
-        cloud_busy = True
         session_id = current_cloud
         model = current_model
-    title = " ".join(text.split())[:60]
+        if command and not session_id:
+            return {"ok": False, "error": "aucune session en cours"}
+        cloud_busy = True
+    title = " ".join(text.split())[:50]
     try:
         if session_id:
-            command = ["claude", "-p", "--cloud", session_id, "--output-format", "json"]
-            done = subprocess.run(command, input=text, capture_output=True, text=True, timeout=90)
-            output = _clean((done.stdout or "") + (done.stderr or ""))
-            _log_cloud("follow-up", command, done.returncode, output)
-            data = _last_json_object(output)
-            if data is not None:
-                ok, url, error = data.get("ok") is True, data.get("url"), data.get("error")
-            else:
-                ok, url, error = done.returncode == 0, None, None
-            if not ok:
-                return {"ok": False, "error": error or output.strip()[-600:] or f"code {done.returncode}"}
-            _save_cloud_session(session_id, title, url)
-            return {"ok": True, "session_id": session_id, "url": url}
+            result = _queue_followup(session_id, text)
+            if not result["ok"]:
+                return {"ok": False, "error": result["error"]}
+            if not command:
+                _save_cloud_session(session_id, title, result["url"])
+            return {"ok": True, "session_id": session_id, "url": result["url"]}
         _ensure_cloud_repo()
         task = "Message : " + text if text.lstrip().startswith("-") else text
-        command = ["claude"] + (["--model", model] if model else []) + ["--cloud", task]
+        command_line = ["claude"] + (["--model", model] if model else []) + ["--cloud", task]
         # Under `script` the CLI gets a full terminal including a
         # controlling one (a bare pty has none, and a program that opens
         # /dev/tty then fails); without `script` it just gets the pty.
-        run = ["script", "-q", "-e", "-c", shlex.join(command), "/dev/null"] if shutil.which("script") else command
+        run = ["script", "-q", "-e", "-c", shlex.join(command_line), "/dev/null"] if shutil.which("script") else command_line
         code, output, reason, timeline = _run_with_pty(run, CLOUD_DIR, 180, stop_after_session_id=True)
         timed_out = reason == "timeout"
         _log_cloud("create", run, code, output, timeline)
@@ -295,6 +338,7 @@ def cloud_send(text):
             current_cloud = found
             _save_state()
         _save_cloud_session(found, title, url)
+        threading.Thread(target=_rename_session, args=(found, title), daemon=True).start()
         return {"ok": True, "session_id": found, "url": url}
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "délai dépassé"}
@@ -334,6 +378,8 @@ class Handler(BaseHTTPRequestHandler):
         body = self.rfile.read(length).decode()
         if self.path == "/api/cloud/message":
             self.reply_json(cloud_send(body))
+        elif self.path == "/api/cloud/command":
+            self.reply_json(cloud_send(body, command=True))
         elif self.path == "/api/cloud/select":
             # "new" = the next message creates a session; otherwise the id
             # of one of /api/cloud/sessions.

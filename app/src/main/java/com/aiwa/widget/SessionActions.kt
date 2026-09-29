@@ -71,10 +71,18 @@ suspend fun addCloudSession(context: Context, bridge: ClaudeBridge, link: String
     AiwaWidget().updateAll(context)
 }
 
-/** modelId null = the CLI's own default. Applies to the next NEW cloud session. */
+/**
+ * modelId null = the CLI's own default. The backend remembers it for the
+ * next NEW cloud session (`claude --model`); when a session is already
+ * open the choice is also sent to it as `/model <alias>`, the documented
+ * way to change a cloud session's model. That message is queued like any
+ * other, so the result is confirmed in the Claude app, not here.
+ */
 suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?) {
+    var accepted = false
     try {
         bridge.selectModel(modelId)
+        accepted = true
     } catch (err: BusyException) {
         // Same as above: the refresh below shows what is real.
     } catch (err: Exception) {
@@ -82,6 +90,20 @@ suspend fun switchModel(context: Context, bridge: ClaudeBridge, modelId: String?
     }
     BackendSync.refresh(bridge)
     AiwaWidget().updateAll(context)
+    if (!accepted || AiwaRepository.state.value.cloudSessionId == null) return
+    val label = modelLabel(modelId)
+    try {
+        val result = bridge.sendCloudCommand("/model " + (modelId ?: "default"))
+        toastOnMain(
+            context,
+            if (result.ok) "Modèle « $label » demandé à la session (à confirmer dans Claude ↗)"
+            else "Modèle « $label » non transmis à la session : ${result.error}",
+        )
+    } catch (err: BusyException) {
+        toastOnMain(context, "Un envoi est en cours : le modèle « $label » n'a pas été transmis à la session, choisis-le à nouveau.")
+    } catch (err: Exception) {
+        toastOnMain(context, describeFailure(context, err, "transmettre le modèle à la session"))
+    }
 }
 
 private const val CLAUDE_APP_PACKAGE = "com.anthropic.claude"

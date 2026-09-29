@@ -99,8 +99,14 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     // (the cloud machine starts). HONEST LIMIT (documented by Anthropic):
     // the CLI only queues the message — there is no way to read the reply
     // back, so it is read in the Claude app.
-    override suspend fun sendCloud(text: String): CloudSendResult = withContext(Dispatchers.IO) {
-        val json = JSONObject(postText("/api/cloud/message", text))
+    override suspend fun sendCloud(text: String): CloudSendResult = postCloud("/api/cloud/message", text)
+
+    // A slash command (e.g. "/model opus") for the CURRENT cloud session:
+    // never creates a session, fails when there is none.
+    override suspend fun sendCloudCommand(text: String): CloudSendResult = postCloud("/api/cloud/command", text)
+
+    private suspend fun postCloud(path: String, text: String): CloudSendResult = withContext(Dispatchers.IO) {
+        val json = JSONObject(postText(path, text))
         if (json.optBoolean("ok", false)) {
             CloudSendResult(
                 ok = true,
