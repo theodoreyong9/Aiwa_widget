@@ -6,26 +6,30 @@
 # update, npm install --force on every single call would make every
 # "Démarrer" tap slow) — it only starts the ALREADY-installed backend
 # inside the ALREADY-installed Ubuntu image. Run bootstrap.sh (which
-# runs setup-termux-proot.sh) by hand at least once first; this will
-# fail loudly if that was never done.
-set -euo pipefail
+# runs setup-termux-proot.sh) by hand at least once first.
+set -uo pipefail
 
 DISTRO=ubuntu
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG="$HOME/aiwa_backend.log"
 
-# Ubuntu present? A directory test, NOT a `proot-distro login ... -- true`:
-# that check used to start proot a first time just to look, then a second
-# time for real — each start costs seconds on a phone, so every launch of
-# the backend was about twice as slow as it had to be.
-if [ ! -d "${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/$DISTRO" ]; then
-  echo "Ubuntu isn't installed yet — run bootstrap.sh by hand once first:"
-  echo "  curl -fsSL https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/backend/bootstrap.sh | bash"
-  exit 1
+# This script usually runs with no terminal at all (Termux's RUN_COMMAND), so
+# everything goes to a file: `cat ~/aiwa_backend.log` shows why a start failed.
+# Written FIRST, so that the file existing proves this script ran.
+{
+  echo "=== $(date) — start.sh, checkout $REPO_DIR ==="
+} > "$LOG" 2>&1
+
+# No "is Ubuntu installed?" pre-check: it either started proot a first time just
+# to look (twice as slow) or guessed where proot-distro keeps its files (a guess
+# that broke the start). If Ubuntu is missing, proot-distro itself says so, in the log.
+termux-wake-lock >> "$LOG" 2>&1 || true
+
+proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 -u /aiwa_widget/backend/aiwa_server.py >> "$LOG" 2>&1
+code=$?
+echo "=== server stopped, exit code $code — $(date) ===" >> "$LOG"
+if [ "$code" -ne 0 ]; then
+  echo "If Ubuntu is not installed yet, run bootstrap.sh by hand once:" >> "$LOG"
+  echo "  curl -fsSL https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/backend/bootstrap.sh | bash" >> "$LOG"
 fi
-
-termux-wake-lock || true
-
-# The server's own output goes to a file (this script usually runs with no
-# terminal at all, through Termux's RUN_COMMAND): `cat ~/aiwa_backend.log`
-# shows why a start failed.
-exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 -u /aiwa_widget/backend/aiwa_server.py > "$HOME/aiwa_backend.log" 2>&1
+exit "$code"

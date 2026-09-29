@@ -179,7 +179,7 @@ backendStatus=awaitBackendVersion(bridge,EXPECTED_BACKEND_VERSION,45_000)?:await
 BackendSync.refresh(bridge)
 val versionNow=AiwaRepository.state.value.backendVersion
 if(backendStatus==null){
-AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois.")}
+AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Backend injoignable après 30 s. Vérifie que Termux est installé, que allow-external-apps=true est dans ~/.termux/termux.properties et que bootstrap.sh a déjà été lancé une fois. Dans Termux : cat ~/aiwa_start.log ~/aiwa_backend.log")}
 }else if(versionNow<EXPECTED_BACKEND_VERSION){
 AiwaRepository.update{it.copy(status=AiwaState.Status.ERROR,notice="Backend obsolète (version $versionNow, il faut $EXPECTED_BACKEND_VERSION) et mise à jour automatique impossible. Dans Termux : cd ~/aiwa_widget && git pull && pkill -f aiwa_server.py, puis rouvre Aiwa.")}
 }
