@@ -37,8 +37,8 @@ if ! grep -q "^allow-external-apps *= *true" "$PROPS" 2>/dev/null; then
   termux-reload-settings || true
 fi
 
-# The APK install/update is folded into this same one command (see install-apk.sh for what it checks and
-# where it leaves the file). What it says is kept in a file, because the rest of this script is long and ends
+# The APK download is folded into this same one command (see install-apk.sh for what it checks and where it
+# leaves the file: Downloads, for you to open from the Files app — the installer is NOT opened from here). What it says is kept in a file, because the rest of this script is long and ends
 # with the server's own output: setup-termux-proot.sh prints that last line again right before it starts.
 echo "== Downloading the latest Aiwa APK =="
 bash "$REPO_DIR/backend/install-apk.sh" 2>&1 | tee "$HOME/.aiwa_apk_last.txt" || true
