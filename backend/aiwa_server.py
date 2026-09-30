@@ -73,6 +73,25 @@ SPHERE_README = "https://raw.githubusercontent.com/theodoreyong9/YourMinedApp/ma
 # index.html, named name.aiwa.html here (the wallet page asks for a name, a version and the code).
 AIWA_FILE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,40}\.aiwa\.html")
 AIWA_PROJECT = "https://raw.githubusercontent.com/theodoreyong9/aiwa_project/main"
+# The public repositories of the GitHub account behind Aiwa and YourMine: an important but OPTIONAL source for
+# whatever is built through the widget (see _sources_line). One line each, taken from the repository's own README;
+# the complete and current list is the account's page, which the instruction also gives.
+REFERENCE_ACCOUNT = "theodoreyong9"
+REFERENCE_REPOS = (
+    ("YourMinedApp", "YourMine, un WebOS sans permission : applications JavaScript (les sphères) et thèmes, runtime et publication ; c'est là que le format des sphères est décrit"),
+    ("Aiwa_core", "cœur du protocole Aiwa : identité, événements signés, journal, VDF, preuves"),
+    ("Aiwa_platform", "infrastructure distribuée d'Aiwa : transport pair à pair, réplication, permissions, données, bundles publiés"),
+    ("Aiwa_lib", "façade publique pour développeurs au-dessus d'Aiwa_core et d'Aiwa_platform : API de wallet, contrats"),
+    ("Aiwa_project", "page wallet d'Aiwa (GitHub Pages), yellow paper, publication de contrats, exemples"),
+    ("Aiwa_widget", "ce widget Android et son backend"),
+    ("AIWA_chain", "implémentation de référence de la chaîne AIWA (deux wallets, Solana) ; yellow paper dans docs/"),
+    ("Game", "AIWA Game : des robots autonomes qui continuent d'agir déconnectés, démonstration de l'idée d'Aiwa"),
+    ("Jobber", "agence personnelle interopérable : application pair à pair, locale d'abord (WebRTC, modules ES)"),
+    ("SGD", "Semantic Graph Democracy : participation collective bâtie sur GitHub (Pages, Issues, Actions) et une IA"),
+    ("ARVT", "Autonomous Relation Value Theory : théorie économique relationnelle, corpus écrit par ses visiteurs"),
+    ("Smartank", "découverte de capacités par IA : navigateur de l'écosystème Hugging Face, WebLLM"),
+    ("Project", "Trio Viewer : une PWA qui affiche trois sites et passe de l'un à l'autre"),
+)
 HTML_TITLE_RE = re.compile(r"<title[^>]*>([^<]{1,200})</title>", re.I)
 # The page the CLI prints to log in with a Claude account (inside terminal escape codes).
 LOGIN_URL_RE = re.compile(r"https://claude\.(?:com|ai)/[^\s\x07\x1b]*oauth/authorize[^\s\x07\x1b]*")
@@ -417,7 +436,23 @@ def _known_repos():
     return [r for r in known if isinstance(r, str) and github.REPO_RE.fullmatch(r)]
 
 
-_INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "verify": "vérification", "alert": "alerte", "extra": "consigne perso"}
+_INSTRUCTION_LABELS = {"repo": "dépôt", "push": "push", "deploy": "déploiement", "verify": "vérification", "sources": "dépôts de référence", "alert": "alerte", "extra": "consigne perso"}
+
+
+def _sources_line():
+    """The account's repositories as a reference: important, never compulsory, read only."""
+    catalog = " ; ".join(f"{name} = {role}" for name, role in REFERENCE_REPOS)
+    return (
+        f"Dépôts de référence (source importante mais FACULTATIVE) : les dépôts publics du compte GitHub `{REFERENCE_ACCOUNT}`, où vivent Aiwa, YourMine et les projets liés. "
+        "Quand je parle de l'un de ces noms, ou que ma demande s'y rattache (une sphère, un contrat Aiwa, un protocole, une fonctionnalité qui existe peut-être déjà), "
+        "cherche d'abord la réponse dans le dépôt concerné avant de supposer ou de réinventer : lis son README "
+        f"(https://raw.githubusercontent.com/{REFERENCE_ACCOUNT}/<dépôt>/main/README.md, lisible sans rattacher le dépôt), puis le code utile "
+        "(`git clone` en lecture dans un dossier temporaire, hors de ton dépôt de travail). "
+        "Si ma demande n'y touche pas, ignore cette liste : elle n'oblige à rien. C'est de la lecture seule : ne modifie aucun de ces dépôts, "
+        "sauf ceux que la consigne « Dépôt » t'autorise à modifier. "
+        f"Les dépôts : {catalog}. "
+        f"Liste complète et à jour : https://github.com/{REFERENCE_ACCOUNT}?tab=repositories."
+    )
 
 
 def _instruction_lines(repo, work, base, direct):
@@ -534,6 +569,8 @@ def _instruction_lines(repo, work, base, direct):
             "(un seul fichier par envoi ; si je te demande une correction, renvoie le fichier complet de la même façon ; "
             "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait l'app.",
         ))
+    # Whatever the repository or the mode: where to look first when the request touches Aiwa, YourMine or a sibling project.
+    lines.append(("sources", _sources_line()))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
     # random topic; the command is harmless when the network blocks it.

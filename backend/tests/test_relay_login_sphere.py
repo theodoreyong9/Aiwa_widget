@@ -353,6 +353,36 @@ class InstructionTests(Base):
         for wanted in ("réécriture", "Building a Sphere", "Profile as Infrastructure", "profileSection", "peerSection", "broadcastData"):
             self.assertIn(wanted, text)
 
+    def test_the_account_repositories_are_offered_as_an_optional_reference(self):
+        for repo in (None, "o/r"):
+            for mode in ("none", "pages", "android", "sphere", "aiwa"):
+                srv.deploy_mode = mode
+                lines = dict(srv._instruction_lines(repo, "w", "main", True))
+                self.assertIn("sources", lines, f"repo={repo} mode={mode}")
+        text = dict(srv._instruction_lines(None, None, None, True))["sources"]
+        for name, role in srv.REFERENCE_REPOS:
+            self.assertIn(f"{name} = {role}", text)
+        names = [name for name, _ in srv.REFERENCE_REPOS]
+        self.assertEqual(len(names), len(set(names)))
+        for wanted in ("FACULTATIVE", "ignore cette liste", "lecture seule", "github.com/theodoreyong9?tab=repositories",
+                       "raw.githubusercontent.com/theodoreyong9/<dépôt>/main/README.md"):
+            self.assertIn(wanted, text)
+        # read-only: it must not contradict the rule that only the session's repositories are touched
+        self.assertNotIn("add_repo", text)
+
+    def test_the_reference_is_told_once_then_only_when_it_changes(self):
+        srv.deploy_mode = "none"
+        first, told = srv._compose({}, None, "w", "main", True)
+        self.assertIn("Dépôts de référence", first)
+        again, _ = srv._compose({"instr": told}, None, "w", "main", True)
+        self.assertEqual(again, "")
+        # a session from before this instruction existed gets it once, as an update, and nothing else repeated
+        older = {k: v for k, v in told.items() if k != "sources"}
+        update, _ = srv._compose({"instr": older}, None, "w", "main", True)
+        self.assertIn("consignes mises à jour", update)
+        self.assertIn("Dépôts de référence", update)
+        self.assertNotIn("Alerte (obligatoire)", update)
+
     def test_other_modes_do_not_mention_spheres(self):
         for mode in ("none", "pages", "android"):
             srv.deploy_mode = mode
