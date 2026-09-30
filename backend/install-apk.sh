@@ -4,8 +4,8 @@
 #
 # Three things it does so that "it did not download" can be told from "it did, and nothing opened":
 #  - it checks what it got (a real APK is megabytes: a failed or cut transfer is not kept, and is said so);
-#  - it keeps the file at a place you can find — $HOME/aiwa-debug.apk, and a copy in the phone's own Downloads
-#    folder when Termux was given storage access (termux-setup-storage, once) — so the Files app can open it;
+#  - it keeps the file at a place you can find — $HOME/aiwa-debug.apk, and a copy (one file, replaced each time) in
+#    the phone's own Downloads folder when Termux was given storage access (termux-setup-storage, once);
 #  - it prints one last line saying which of those happened.
 # Android still wants a tap of its own on the installer: nothing here can install silently.
 set -uo pipefail
@@ -30,8 +30,18 @@ mv -f "$PART" "$APK_PATH"
 size=$(( $(wc -c < "$APK_PATH") / 1024 / 1024 ))
 echo "APK: downloaded, ${size} MB -> $APK_PATH"
 
-if [ -d "$HOME/storage/downloads" ] && cp -f "$APK_PATH" "$HOME/storage/downloads/Aiwa_widget.apk" 2>/dev/null; then
-  echo "APK: a copy is in the phone's Downloads folder (Aiwa_widget.apk): open it from the Files app if no installer appears."
+# ONE file of a fixed name, replaced each time: the older copy is removed before the new one is written.
+# (A browser or the Files app makes "Aiwa_widget (1).apk" when the name is taken — this script never does.)
+DL="$HOME/storage/downloads"
+if [ -d "$DL" ]; then
+  rm -f "$DL/Aiwa_widget.apk" 2>/dev/null
+  if cp -f "$APK_PATH" "$DL/Aiwa_widget.apk" 2>/dev/null; then
+    echo "APK: the latest is in the phone's Downloads folder as Aiwa_widget.apk (replaced, not duplicated): open it from the Files app if no installer appears."
+  else
+    echo "APK: could not write Downloads/Aiwa_widget.apk (an older file of that name may belong to another app, such as your browser): delete it in the Files app, then run this again."
+  fi
+  others=$(ls -1 "$DL" 2>/dev/null | grep -E '^Aiwa_widget.+\.apk$' | tr '\n' ' ')
+  [ -n "$others" ] && echo "APK: other copies of the app in Downloads, not made by this script (older builds — delete them in the Files app): $others"
 else
   echo "APK: for a copy in the phone's Downloads folder, run termux-setup-storage once (and accept), then this script again."
 fi

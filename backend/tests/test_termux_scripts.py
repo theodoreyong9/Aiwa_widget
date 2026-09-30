@@ -14,6 +14,10 @@ while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift;; esac; shift; done
 [ "$STUB_CURL" = fail ] && exit 22
 head -c "$STUB_BYTES" /dev/zero > "$out"
 """
+CP = """#!/bin/bash
+[ "$STUB_CP" = fail ] && exit 1
+exec /bin/cp "$@"
+"""
 OPEN = """#!/bin/bash
 [ "$STUB_OPEN" = fail ] && exit 1
 echo "$1" >> "$HOME/opened.txt"
@@ -26,7 +30,7 @@ class InstallApkTests(unittest.TestCase):
         self.home = Path(self.tmp.name)
         bin_dir = self.home / "bin"
         bin_dir.mkdir()
-        for name, body in (("curl", CURL), ("termux-open", OPEN), ("pkg", "#!/bin/bash\nexit 0\n")):
+        for name, body in (("curl", CURL), ("cp", CP), ("termux-open", OPEN), ("pkg", "#!/bin/bash\nexit 0\n")):
             path = bin_dir / name
             path.write_text(body)
             path.chmod(path.stat().st_mode | stat.S_IEXEC)
@@ -54,7 +58,36 @@ class InstallApkTests(unittest.TestCase):
         (self.home / "storage" / "downloads").mkdir(parents=True)
         done = self.run_script()
         self.assertEqual((self.home / "storage" / "downloads" / "Aiwa_widget.apk").stat().st_size, 3000000)
-        self.assertIn("Downloads folder (Aiwa_widget.apk)", done.stdout)
+        self.assertIn("Downloads folder as Aiwa_widget.apk", done.stdout)
+
+    def test_the_downloads_copy_is_replaced_not_duplicated(self):
+        downloads = self.home / "storage" / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / "Aiwa_widget.apk").write_bytes(b"older build")
+        done = self.run_script()
+        self.assertEqual((downloads / "Aiwa_widget.apk").stat().st_size, 3000000)
+        self.assertEqual(sorted(p.name for p in downloads.iterdir()), ["Aiwa_widget.apk"])
+        self.assertIn("replaced, not duplicated", done.stdout)
+        self.assertNotIn("other copies", done.stdout)
+
+    def test_copies_made_by_something_else_are_reported_and_left_alone(self):
+        downloads = self.home / "storage" / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / "Aiwa_widget (1).apk").write_bytes(b"from the browser")
+        done = self.run_script()
+        self.assertEqual((downloads / "Aiwa_widget (1).apk").read_bytes(), b"from the browser")
+        self.assertIn("other copies", done.stdout)
+        self.assertIn("Aiwa_widget (1).apk", done.stdout)
+
+    def test_a_file_that_cannot_be_replaced_is_said_not_hidden(self):
+        downloads = self.home / "storage" / "downloads"
+        downloads.mkdir(parents=True)
+        (downloads / "Aiwa_widget.apk").write_bytes(b"not ours to replace")
+        done = self.run_script(STUB_CP="fail")   # the copy is refused, as Android may for a file another app made
+        self.assertEqual(done.returncode, 0)
+        self.assertIn("could not write Downloads/Aiwa_widget.apk", done.stdout)
+        self.assertNotIn("replaced, not duplicated", done.stdout)
+        self.assertTrue((self.home / "aiwa-debug.apk").exists())
 
     def test_without_storage_access_it_says_how_to_get_the_copy(self):
         self.assertIn("termux-setup-storage", self.run_script().stdout)
