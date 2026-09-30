@@ -20,6 +20,7 @@ either, everything still works.
 
 Nothing here is verified on a real phone.
 """
+import calendar
 import json
 import os
 import re
@@ -34,6 +35,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 REPOS_DIR = Path.home() / "repos"
+# Overridable so the Actions lookup can be tested without the network.
+GITHUB_API = os.environ.get("AIWA_GITHUB_API", "https://api.github.com")
+# Runs nobody asked for, which say nothing about the user's work: the ones a workflow
+# schedules for itself (a weekly bot) and GitHub's own dynamic ones (the Pages build).
+NOT_NEWS_EVENTS = ("schedule", "dynamic")
+OK_CONCLUSIONS = ("success", "skipped", "neutral")
 # Overridable so the clone path can be tested without the network.
 GITHUB_BASE = os.environ.get("AIWA_GITHUB_BASE", "https://github.com")
 REPO_RE = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
@@ -129,31 +136,49 @@ def owner_repos(owner):
     return repos
 
 
+def _epoch(stamp):
+    """Epoch seconds of a GitHub timestamp (2026-09-30T05:17:06Z); 0 when unreadable."""
+    try:
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return 0
+
+
 def latest_run(repo):
-    """The most recent GitHub Actions run of a repository: {"state":
-    "running" | "success" | "failure" | "none", "url"} — a plain
-    unauthenticated request (public repositories), None when it can't be
-    told (private, rate-limited...)."""
+    """The verdict on the most recent COMMIT of a repository's GitHub Actions: {"state":
+    "running" | "success" | "failure" | "none", "url", "id", "sha", "done", "detail"} — a plain
+    unauthenticated request (public repositories), None when it can't be told (private,
+    rate-limited...).
+
+    One push starts several runs (the workflow itself, sometimes more): they are ONE verdict,
+    "running" until the last has finished, "success" when none failed (skipped and neutral
+    ones don't count), "failure" when one did (url: that one). Scheduled and dynamic runs are
+    left out (see NOT_NEWS_EVENTS). done: when the last of them finished; detail: which
+    workflow, what commit, what event and who — so that a surprising answer can be explained."""
     try:
         request = urllib.request.Request(
-            f"https://api.github.com/repos/{repo}/actions/runs?per_page=1",
+            f"{GITHUB_API}/repos/{repo}/actions/runs?per_page=20",
             headers={"User-Agent": "aiwa", "Accept": "application/vnd.github+json"},
         )
         with urllib.request.urlopen(request, timeout=10) as reply:
             data = json.load(reply)
     except (OSError, ValueError):
         return None
-    runs = data.get("workflow_runs") or []
+    runs = [r for r in (data.get("workflow_runs") or []) if r.get("event") not in NOT_NEWS_EVENTS]
     if not runs:
         return {"state": "none", "url": None}
-    run = runs[0]
-    if run.get("status") != "completed":
+    head = runs[0]  # the newest, by creation
+    same = [r for r in runs if r.get("head_sha") == head.get("head_sha")]
+    shown, done = head, None
+    if any(r.get("status") != "completed" for r in same):
         state = "running"
-    elif run.get("conclusion") == "success":
-        state = "success"
     else:
-        state = "failure"
-    return {"state": state, "url": run.get("html_url"), "id": run.get("id")}
+        failed = next((r for r in same if r.get("conclusion") not in OK_CONCLUSIONS), None)
+        state, shown = ("failure", failed) if failed else ("success", head)
+        done = max(_epoch(r.get("updated_at")) for r in same)
+    actor = (shown.get("actor") or {}).get("login") or "?"
+    detail = f"{shown.get('name') or '?'} — {shown.get('display_title') or '?'} ({shown.get('event') or '?'}, {actor})"
+    return {"state": state, "url": shown.get("html_url"), "id": head.get("id"), "sha": head.get("head_sha"), "done": done, "detail": detail}
 
 
 def checkout_owner():

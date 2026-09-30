@@ -107,6 +107,8 @@ data class AiwaState(
     val ciUrl: String? = null,
     // A new green run the user has not been told about: there is something to look at.
     val ciFresh: Boolean = false,
+    // Which workflow / commit / event / author the GitHub verdict is about (the "État d'Aiwa" list says it).
+    val ciDetail: String? = null,
     val githubError: String? = null,
     // Whether the local backend answers: "unknown" (not asked yet), "up", "down",
     // or "starting" (Termux was asked to start it, since backendStartedAt).

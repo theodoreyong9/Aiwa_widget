@@ -147,9 +147,14 @@ relay_seen = {"id": None, "time": None}
 site_lock = threading.Lock()
 site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
 ci_cache = {"repo": None, "info": None, "at": 0.0, "busy": False}
-# repo -> id of the last Actions run the user was told about (persisted): a
-# green run with another id is news — "you can go and look".
+# repo -> the commit whose Actions runs the user was last told about (persisted): a
+# green commit that is not this one is news — "you can go and look".
 ci_seen = {}
+# repo -> the commit of the last "Prêt" written to the log (once each).
+ci_announced = {}
+# When the user last sent a message through Aiwa (epoch seconds, persisted): a green
+# commit only counts as news if its runs finished after it.
+last_message_at = 0
 REPOS_STORE = Path.home() / ".aiwa_repos.json"
 store_lock = threading.Lock()
 # Two `claude -p --cloud <id>` runs never overlap (a send and the /rename
@@ -159,7 +164,7 @@ followup_lock = threading.Lock()
 
 def _load_state():
     global current_model, current_cloud, current_repo, push_main, deploy_mode, extra
-    global current_effort, waiting_topic, last_cloud, sphere
+    global current_effort, waiting_topic, last_cloud, sphere, last_message_at
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -185,7 +190,11 @@ def _load_state():
     seen = data.get("ci_seen")
     ci_seen.clear()
     if isinstance(seen, dict):
-        ci_seen.update({k: v for k, v in seen.items() if isinstance(k, str) and isinstance(v, int)})
+        # Commit ids. The run ids an older version kept are dropped: the first look at a
+        # repository then takes what is there as already known, instead of one false "Prêt".
+        ci_seen.update({k: v for k, v in seen.items() if isinstance(k, str) and isinstance(v, str)})
+    sent = data.get("last_message")
+    last_message_at = sent if isinstance(sent, int) else 0
     checked = data.get("relay_cloud")
     if isinstance(checked, dict):
         relay_cloud.update({k: checked.get(k) if isinstance(checked.get(k), (int, float)) else None for k in ("asked", "ok")})
@@ -214,7 +223,7 @@ def _save_state():
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
             "push_main": push_main, "deploy": deploy_mode, "extra": extra, "extra_repos": extra_repos,
             "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud, "ci_seen": ci_seen,
-            "relay_cloud": relay_cloud, "sphere": sphere, "relay_seen": relay_seen,
+            "relay_cloud": relay_cloud, "sphere": sphere, "relay_seen": relay_seen, "last_message": last_message_at,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -687,6 +696,7 @@ def cloud_send(text, command=False):
                 return {"ok": False, "error": result["error"]}
             _set_login_state("ok")
             if not command:
+                _note_message_sent()
                 _save_cloud_session(session_id, title, result["url"], instr=fingerprint)
             return {"ok": True, "session_id": session_id, "url": result["url"]}
         directory, work, base = CLOUD_DIR, None, None
@@ -748,6 +758,7 @@ def cloud_send(text, command=False):
                     _save_state()
             return {"ok": False, "error": reason + " — sortie : " + output.strip()[-600:]}
         _set_login_state("ok")
+        _note_message_sent()
         with lock:
             current_cloud = last_cloud = found
             _save_state()
@@ -803,12 +814,15 @@ def _ci_probe(repo):
 
 
 def _ci_snapshot():
-    """The latest GitHub Actions run of the current repository ({"state",
-    "url", "fresh"}, or None when unknown). Public data, looked up every
-    150 s (40 s while a run is going) — the unauthenticated API allows only
-    60 requests an hour. fresh: the run is green and is a new one the user
-    has not been told about yet, i.e. there is something to go and look at
-    (the first run ever seen is taken as already known)."""
+    """The verdict on the latest commit of the current repository's GitHub Actions ({"state",
+    "url", "detail", "fresh"}, or None when unknown): see aiwa_github.latest_run. Public
+    data, looked up every 150 s (40 s while runs are going) — the unauthenticated API allows
+    only 60 requests an hour.
+
+    fresh: there is something to go and look at — the commit's runs have all finished green,
+    it is not the one the user was last told about, and they finished after the user's last
+    message through Aiwa (work nobody asked for, like a collaborator's push, is no news). The
+    first commit ever seen is taken as already known."""
     with lock:
         repo = current_repo
     if not repo:
@@ -823,26 +837,30 @@ def _ci_snapshot():
     if not info:
         return None
     result = dict(info, fresh=False)
-    if info.get("state") == "success" and info.get("id") is not None:
+    sha = info.get("sha")
+    if info.get("state") == "success" and sha:
         with lock:
             seen = ci_seen.get(repo)
             if seen is None:
-                ci_seen[repo] = info["id"]
+                ci_seen[repo] = sha
                 _save_state()
-            else:
-                result["fresh"] = seen != info["id"]
+            elif seen != sha:
+                result["fresh"] = (info.get("done") or 0) >= last_message_at
+        if result["fresh"] and ci_announced.get(repo) != sha:
+            ci_announced[repo] = sha
+            print(f"[{_ts()}] CI news for {repo}: {info.get('detail')} ({sha[:7]})", flush=True)
     return result
 
 
 def _ci_acknowledge():
-    """The user went to look: this run is no longer news."""
+    """The user went to look: this commit is no longer news."""
     with lock:
         repo = current_repo
     with site_lock:
         info = ci_cache["info"] if ci_cache["repo"] == repo else None
-    if repo and info and info.get("id") is not None:
+    if repo and info and info.get("sha"):
         with lock:
-            ci_seen[repo] = info["id"]
+            ci_seen[repo] = info["sha"]
             _save_state()
 
 
@@ -898,6 +916,13 @@ def _claude_auth_status():
 def _set_login_state(state):
     with login_lock:
         claude_login.update(state=state, at=time.time())
+
+
+def _note_message_sent():
+    global last_message_at
+    with lock:
+        last_message_at = int(time.time())
+        _save_state()
 
 
 def _note_login_problem(output):

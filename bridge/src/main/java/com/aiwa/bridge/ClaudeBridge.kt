@@ -16,9 +16,10 @@ data class SphereCode(val name: String, val code: String)
 // CLI said last, when it said something.
 data class LoginStep(val phase: String, val url: String?, val message: String)
 
-// state: running, success, failure or none.
-// fresh: a new green run the user has not been told about yet.
-data class CiInfo(val state: String, val url: String?, val fresh: Boolean = false)
+// state: running, success, failure or none — the verdict on the latest commit's runs together.
+// fresh: a new green commit the user has not been told about yet. detail: which workflow, commit,
+// event and author the verdict is about (so that a surprising "Prêt" can be explained).
+data class CiInfo(val state: String, val url: String?, val fresh: Boolean = false, val detail: String? = null)
 
 data class BackendStatus(
     val model: String?,

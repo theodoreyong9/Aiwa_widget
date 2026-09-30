@@ -342,6 +342,11 @@ class HealthActivity : ComponentActivity() {
                         add(PickerEntry("Tester maintenant (demandé à la session en cours)", false) { retest() })
                     }
                 }
+                // What the "Prêt" button and the Actions button are about: when "Prêt" shows up unexpectedly,
+                // this says which run it was.
+                state.ciDetail?.let { detail ->
+                    add(PickerEntry((if (state.ciFresh) "« Prêt » vient de : " else "Dernier résultat GitHub suivi : ") + detail, false, lines = 4) { })
+                }
                 add(PickerEntry("Permissions Termux et notifications…", false) { go(SetupActivity::class.java) })
                 add(PickerEntry("Choisir la session…", false) { go(SessionPickerActivity::class.java) })
             }

@@ -60,6 +60,7 @@ object BackendSync {
                     ciState = status.ci?.state,
                     ciUrl = status.ci?.url,
                     ciFresh = status.ci?.fresh ?: false,
+                    ciDetail = status.ci?.detail,
                     githubError = status.githubError,
                     claudeLogin = status.claudeLogin,
                     relayCloud = status.relayCloud,

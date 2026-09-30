@@ -1,5 +1,6 @@
 """Tests of what comes back through the relay (a sphere, the relay test, the
-"Claude waits" ping), of the Claude login the app drives, and of the HTTP routes.
+"Claude waits" ping), of the Claude login the app drives, of the CI news behind the
+widget's "Prêt" chip, and of the HTTP routes.
 
 No network and no real `claude`: a fake ntfy server and a fake `claude` script stand
 in for them. What the fakes copy was seen with the real ones — the real CLI prints
@@ -27,6 +28,7 @@ BIN.mkdir()
 os.environ["PATH"] = f"{BIN}{os.pathsep}{os.environ['PATH']}"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import aiwa_github as gh  # noqa: E402
 import aiwa_server as srv  # noqa: E402
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
@@ -351,6 +353,8 @@ class CloudSendTests(Base):
         self.assertIn("Title: aiwa-check", task)
         self.assertEqual(srv._relay_cloud_state(), "pending")
         self.assertEqual(srv.claude_login["state"], "ok")  # a send that worked proves the login
+        self.assertAlmostEqual(srv.last_message_at, time.time(), delta=60)  # the "Prêt" chip counts from here
+        self.assertAlmostEqual(json.loads(Path(srv.STATE_FILE).read_text())["last_message"], time.time(), delta=60)
 
     def test_once_the_relay_is_confirmed_a_new_session_does_not_ask_again(self):
         srv._cloud_check_seen()
@@ -376,6 +380,135 @@ class CloudSendTests(Base):
         task = self.sent()["argv"][-1]
         self.assertIn("Title: aiwa-sphere", task)
         self.assertIn(f"{srv.NTFY_SERVER}/{srv.waiting_topic}", task)
+
+
+class FakeGithub(http.server.BaseHTTPRequestHandler):
+    runs = []       # the workflow_runs the next request gets, newest first
+    status = 200
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        body = json.dumps({"workflow_runs": self.runs}).encode()
+        self.send_response(self.status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def run(run_id, sha, status="completed", conclusion="success", event="push", name="Build", title="a commit", actor="someone", updated="2026-09-30T05:17:06Z"):
+    return {"id": run_id, "head_sha": sha, "status": status, "conclusion": conclusion if status == "completed" else None, "event": event,
+            "name": name, "display_title": title, "actor": {"login": actor}, "updated_at": updated, "html_url": f"https://github.com/o/r/actions/runs/{run_id}"}
+
+
+class CiNewsTests(unittest.TestCase):
+    """The verdict on the latest commit's runs, and when it is news (the "Prêt" chip)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeGithub)
+        threading.Thread(target=cls.api.serve_forever, daemon=True).start()
+        gh.GITHUB_API = f"http://127.0.0.1:{cls.api.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.api.shutdown()
+
+    def setUp(self):
+        FakeGithub.runs, FakeGithub.status = [], 200
+        srv.current_repo = "o/r"
+        srv.ci_seen.clear()
+        srv.ci_announced.clear()
+        srv.last_message_at = 0
+        with srv.site_lock:
+            srv.ci_cache.update(repo=None, info=None, at=0.0, busy=False)
+
+    def look(self):
+        """One look at the repository, as the backend does every 150 s."""
+        with srv.site_lock:
+            srv.ci_cache.update(repo="o/r", info=gh.latest_run("o/r"), at=time.time(), busy=False)
+        return srv._ci_snapshot()
+
+    def test_the_runs_of_one_commit_are_one_verdict(self):
+        FakeGithub.runs = [run(3, "S2", name="Pages", status="in_progress"), run(2, "S2", name="Build"), run(1, "S1")]
+        self.assertEqual(gh.latest_run("o/r")["state"], "running")
+        FakeGithub.runs = [run(3, "S2", name="Pages"), run(2, "S2", name="Build"), run(1, "S1")]
+        verdict = gh.latest_run("o/r")
+        self.assertEqual((verdict["state"], verdict["sha"]), ("success", "S2"))
+        self.assertIn("Pages", verdict["detail"])
+
+    def test_a_failed_run_of_the_commit_is_the_verdict_and_the_link(self):
+        FakeGithub.runs = [run(3, "S2", name="Pages"), run(2, "S2", name="Build", conclusion="failure"), run(1, "S1")]
+        verdict = gh.latest_run("o/r")
+        self.assertEqual(verdict["state"], "failure")
+        self.assertTrue(verdict["url"].endswith("/2"))
+
+    def test_skipped_runs_do_not_spoil_a_green_commit(self):
+        FakeGithub.runs = [run(2, "S2", conclusion="skipped"), run(1, "S2")]
+        self.assertEqual(gh.latest_run("o/r")["state"], "success")
+
+    def test_scheduled_and_dynamic_runs_are_not_news(self):
+        FakeGithub.runs = [run(9, "X", event="schedule", name="Regenerate"), run(8, "Y", event="dynamic", name="pages build and deployment"), run(7, "S1")]
+        self.assertEqual(gh.latest_run("o/r")["sha"], "S1")
+        FakeGithub.runs = [run(9, "X", event="schedule")]
+        self.assertEqual(gh.latest_run("o/r"), {"state": "none", "url": None})
+
+    def test_an_unreadable_answer_is_not_a_verdict(self):
+        FakeGithub.status = 500
+        self.assertIsNone(gh.latest_run("o/r"))
+
+    def test_the_first_commit_ever_seen_is_not_news(self):
+        FakeGithub.runs = [run(1, "S1")]
+        self.assertFalse(self.look()["fresh"])
+        self.assertEqual(srv.ci_seen["o/r"], "S1")
+
+    def test_a_new_green_commit_is_news_until_the_user_looked(self):
+        FakeGithub.runs = [run(1, "S1")]
+        self.look()
+        FakeGithub.runs = [run(2, "S2"), run(1, "S1")]
+        self.assertTrue(self.look()["fresh"])
+        srv._ci_acknowledge()
+        self.assertFalse(srv._ci_snapshot()["fresh"])
+
+    def test_a_second_workflow_of_the_same_commit_is_not_news_again(self):
+        FakeGithub.runs = [run(1, "S1")]
+        self.look()
+        FakeGithub.runs = [run(3, "S2", name="Pages", status="in_progress"), run(2, "S2", name="Build")]
+        self.assertFalse(self.look()["fresh"])  # still running: not yet
+        FakeGithub.runs = [run(3, "S2", name="Pages"), run(2, "S2", name="Build")]
+        self.assertTrue(self.look()["fresh"])
+        srv._ci_acknowledge()
+        FakeGithub.runs = [run(4, "S2", name="Another", event="workflow_dispatch"), run(3, "S2", name="Pages"), run(2, "S2", name="Build")]
+        self.assertFalse(self.look()["fresh"])  # the same commit: already looked at
+
+    def test_a_red_commit_is_no_news_and_the_next_green_one_is(self):
+        FakeGithub.runs = [run(1, "S1")]
+        self.look()
+        FakeGithub.runs = [run(2, "S2", conclusion="failure"), run(1, "S1")]
+        self.assertFalse(self.look()["fresh"])
+        FakeGithub.runs = [run(3, "S3"), run(2, "S2", conclusion="failure"), run(1, "S1")]
+        self.assertTrue(self.look()["fresh"])
+
+    def test_runs_finished_before_the_users_last_message_are_not_news(self):
+        FakeGithub.runs = [run(1, "S1")]
+        self.look()
+        srv.last_message_at = gh._epoch("2026-09-30T06:00:00Z")
+        FakeGithub.runs = [run(2, "S2", updated="2026-09-30T05:00:00Z"), run(1, "S1")]
+        self.assertFalse(self.look()["fresh"])
+        FakeGithub.runs = [run(3, "S3", updated="2026-09-30T06:30:00Z"), run(2, "S2"), run(1, "S1")]
+        self.assertTrue(self.look()["fresh"])
+
+    def test_a_run_id_kept_by_an_older_version_does_not_make_a_false_news(self):
+        Path(srv.STATE_FILE).write_text(json.dumps({"repo": "o/r", "ci_seen": {"o/r": 123456, "x/y": "abc"}}))
+        srv._load_state()
+        self.assertEqual(srv.ci_seen, {"x/y": "abc"})
+        FakeGithub.runs = [run(1, "S1")]
+        self.assertFalse(self.look()["fresh"])
+
+    def test_the_detail_says_which_run_it_is(self):
+        FakeGithub.runs = [run(1, "S1", name="Build Aiwa APK", title="Sphere instruction", event="push", actor="theodoreyong9")]
+        self.assertEqual(gh.latest_run("o/r")["detail"], "Build Aiwa APK — Sphere instruction (push, theodoreyong9)")
 
 
 class HttpTests(Base):
