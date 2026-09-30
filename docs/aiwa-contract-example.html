@@ -8,9 +8,10 @@
 <meta name="aiwa-icon" content="🔢">
 <!--
   THE SHAPE OF AN AIWA CONTRACT THAT IS ALSO A YOURMINE SPHERE (this file is named counter-example.aiwa.html).
-  The Aiwa wallet page publishes it as it is, and runs it standalone. Aiwa generates the YourMine sphere from
-  THIS SAME FILE (no second file to write): the sphere reads the import map, the style and the logic script
-  below and runs the logic inside its own panel. So:
+  The Aiwa wallet page publishes it as it is, and runs it standalone. Once it is published, the Aiwa page
+  offers a YourMine sphere PINNED to that published version (no second file to write, and the sphere holds no
+  copy of this code): it fetches the signed events, checks them against the pinned manifest id, then reads the
+  import map, the style and the logic script below and runs the logic inside its own panel. So:
    - the import map is the contract's dependencies; every import in the logic uses a bare name from it or an
      ABSOLUTE url (never a relative path: a YourMine panel has no folder to be relative to);
    - every CSS rule starts with the root class `.aiwa-` + the file's name (here `.aiwa-counter-example`):

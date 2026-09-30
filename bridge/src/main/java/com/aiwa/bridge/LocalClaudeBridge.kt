@@ -230,8 +230,8 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
         if (!json.optBoolean("accepted", false)) throw IllegalStateException(json.str("reason") ?: "le test n'a pas pu partir")
     }
 
-    override suspend fun sphereCode(asSphere: Boolean): SphereCode = withContext(Dispatchers.IO) {
-        val json = JSONObject(getText(if (asSphere) "/api/sphere/code?as=sphere" else "/api/sphere/code"))
+    override suspend fun sphereCode(): SphereCode = withContext(Dispatchers.IO) {
+        val json = JSONObject(getText("/api/sphere/code"))
         if (!json.optBoolean("ok", false)) throw IllegalStateException(json.str("error") ?: "aucune sphère reçue")
         SphereCode(json.getString("name"), json.getString("code"), json.optString("kind", "sphere"))
     }

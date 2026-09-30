@@ -13,9 +13,7 @@ import http.server
 import json
 import os
 import re
-import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import threading
@@ -276,84 +274,16 @@ class AiwaContractTests(Base):
         text = dict(srv._instruction_lines(None, None, None, True))["deploy"]
         for wanted in ("-T nom.aiwa.html", "Title: aiwa-app", f"{srv.NTFY_SERVER}/{srv.waiting_topic}", "YELLOWPAPER.md",
                        "channel-contract.html", "Ne le pousse sur AUCUN dépôt", "defineContract",
-                       # the contract is also the YourMine sphere: the shape it must have
-                       "aiwa-contract-example.html", "tu n'écris donc PAS de `.sphere.js`", 'id="aiwa-logic"', "mount(container, host)",
-                       "__AIWA_HOST__", "host.kind", "`.aiwa-` + le nom du fichier", "aiwa-icon"):
+                       # the contract must also run as a YourMine sphere, which the Aiwa page generates
+                       # AFTER publishing (pinned to the published contract): the shape it must have
+                       "aiwa-contract-example.html", "Tu n'écris donc PAS de `.sphere.js`", "AUCUNE copie du code", 'id="aiwa-logic"',
+                       "mount(container, host)", "__AIWA_HOST__", "host.kind", "`.aiwa-` + le nom du fichier", "aiwa-icon"):
             self.assertIn(wanted, text)
         self.assertIn("raw.githubusercontent.com/theodoreyong9/aiwa_project/main/", text)
         for mode in ("none", "pages", "android", "sphere"):
             srv.deploy_mode = mode
             joined = " ".join(t for _, t in srv._instruction_lines("o/r", "w", "main", True))
             self.assertNotIn("aiwa-app", joined)
-
-
-# YourMine's merge.js reads a sphere's metadata with this function (copied here verbatim): the generated
-# sphere must give it name, icon, category and description.
-MERGE_EXTRACT = r"""
-function extractSphereField(code, field) {
-  const defMatch = code.match(/window\.YM_S\s*\[.*?\]\s*=\s*\{([\s\S]{0,1200})/);
-  const searchIn = defMatch ? defMatch[1] : code.slice(0, 3000);
-  const r1 = new RegExp("['\"]?" + field + "['\"]?\\s*:\\s*'([^'\\n\\$\\{\\}]{1,120})'");
-  const r2 = new RegExp('[\'"?]' + field + '[\'"]?\\s*:\\s*"([^"\\n\\x24\\x7B\\x7D]{1,120})"');
-  const m1 = searchIn.match(r1); if (m1) return m1[1].trim();
-  const m2 = searchIn.match(r2); if (m2) return m2[1].trim();
-  return null;
-}
-"""
-
-
-def node(script, stdin=""):
-    done = subprocess.run(["node", "-e", script], input=stdin, capture_output=True, text=True, timeout=60)
-    return done.returncode, done.stdout, done.stderr
-
-
-@unittest.skipUnless(shutil.which("node"), "node is needed to run the generated sphere")
-class SphereFromContractTests(Base):
-    """The YourMine sphere Aiwa generates from a contract (the same code, run in the panel)."""
-
-    PAGE = ("<!doctype html><title>Demo App</title><meta name=\"description\" content=\"Does demo things.\">"
-            "<meta name=\"aiwa-icon\" content=\"🧪\"><div id=\"app\"></div><script type=\"module\" id=\"aiwa-logic\">export function mount(){}</script>")
-
-    def test_the_generated_sphere_is_valid_and_registers_its_file_name(self):
-        file, source = srv._sphere_from_contract("demo-app.aiwa.html", self.PAGE)
-        self.assertEqual(file, "demo-app.sphere.js")
-        code, out, err = node("const window = {}; const document = {}; eval(require('fs').readFileSync(0,'utf8')); "
-                              "const s = window.YM_S['demo-app.sphere.js']; console.log(JSON.stringify([typeof s.activate, typeof s.deactivate, typeof s.renderPanel, s.category]))", source)
-        self.assertEqual((code, json.loads(out)), (0, ["function", "function", "function", "Aiwa"]), err)
-
-    def test_yourmines_merge_script_reads_its_metadata(self):
-        _, source = srv._sphere_from_contract("demo-app.aiwa.html", self.PAGE)
-        code, out, err = node(MERGE_EXTRACT + "const src = require('fs').readFileSync(0,'utf8'); "
-                              "console.log(JSON.stringify(['name','icon','category','description'].map(f => extractSphereField(src, f))))", source)
-        self.assertEqual((code, json.loads(out)), (0, ["Demo App", "🧪", "Aiwa", "Does demo things."]), err)
-
-    def test_awkward_metadata_is_made_readable_to_it(self):
-        page = ("<title>L'app {du} $jour</title><meta name=\"description\" content=\"It's a very long description, with {braces}, $dollars, and a lot more words than fit in "
-                "a hundred and twenty characters, so that it has to be cut somewhere sensible.\">" + self.PAGE[self.PAGE.index("<div"):])
-        _, source = srv._sphere_from_contract("x.aiwa.html", page)
-        code, out, err = node(MERGE_EXTRACT + "const src = require('fs').readFileSync(0,'utf8'); "
-                              "console.log(JSON.stringify(['name','description'].map(f => extractSphereField(src, f))))", source)
-        name, description = json.loads(out)
-        self.assertEqual(name, "L’app du jour")
-        self.assertTrue(0 < len(description) <= 121 and description.endswith("…") and "{" not in description and "$" not in description, description)
-
-    def test_the_contract_is_embedded_exactly_and_safely(self):
-        page = "<title>t</title><script>/* </script>   ` ${x} __NAME__ __DESC__ '\"\\ */</script>" + self.PAGE[self.PAGE.index("<div"):]
-        _, source = srv._sphere_from_contract("x.aiwa.html", page)
-        self.assertNotIn("</script>", source)
-        self.assertNotIn(" ", source)
-        literal = re.search(r"CONTRACT = (\".*\");\n", source).group(1)
-        self.assertEqual(json.loads(literal), page)
-
-    def test_the_sphere_is_asked_for_through_the_code_route(self):
-        srv._sphere_received(self.sphere_event("c1", "demo-app.aiwa.html", self.PAGE, title="aiwa-app"), kind="aiwa")
-        plain = srv._sphere_code()
-        self.assertEqual((plain["name"], plain["kind"], plain["code"]), ("demo-app.aiwa.html", "aiwa", self.PAGE))
-        generated = srv._sphere_code(as_sphere=True)
-        self.assertEqual((generated["name"], generated["kind"]), ("demo-app.sphere.js", "sphere"))
-        self.assertIn("window.YM_S['demo-app.sphere.js']", generated["code"])
-        srv._sphere_received(self.sphere_event("s1"), kind="sphere")  # a real sphere is left as it is
-        self.assertEqual(srv._sphere_code(as_sphere=True)["code"], SPHERE)
 
 
 class RelayTests(Base):
@@ -692,11 +622,11 @@ class HttpTests(Base):
         self.call("/api/sphere/seen", "")
         self.assertTrue(self.call("/api/status")["sphere"]["seen"])
 
-    def test_the_generated_sphere_is_served_with_as_sphere(self):
-        srv._sphere_received(self.sphere_event("c1", "demo-app.aiwa.html", SphereFromContractTests.PAGE, title="aiwa-app"), kind="aiwa")
-        self.assertEqual(self.call("/api/sphere/code")["kind"], "aiwa")
-        generated = self.call("/api/sphere/code?as=sphere")
-        self.assertEqual((generated["kind"], generated["name"]), ("sphere", "demo-app.sphere.js"))
+    def test_a_contract_is_served_as_it_was_sent_whatever_the_query(self):
+        page = "<!doctype html><title>Demo</title><script type=\"module\" id=\"aiwa-logic\">export function mount(){}</script>"
+        srv._sphere_received(self.sphere_event("c1", "demo-app.aiwa.html", page, title="aiwa-app"), kind="aiwa")
+        served = self.call("/api/sphere/code")
+        self.assertEqual((served["name"], served["kind"], served["code"]), ("demo-app.aiwa.html", "aiwa", page))
 
     def test_deploy_mode_aiwa_is_accepted(self):
         self.call("/api/options", json.dumps({"deploy": "aiwa"}))

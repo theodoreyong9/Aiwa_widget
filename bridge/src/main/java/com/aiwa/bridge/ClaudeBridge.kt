@@ -111,9 +111,8 @@ interface ClaudeBridge {
 
     // ---- The sphere Claude sent ----
 
-    // Throws when none was received. asSphere: for an Aiwa contract, the YourMine sphere generated from it
-    // instead (the same code, to open in YourMine).
-    suspend fun sphereCode(asSphere: Boolean = false): SphereCode
+    // Throws when none was received.
+    suspend fun sphereCode(): SphereCode
 
     suspend fun sphereSeen()
 }
