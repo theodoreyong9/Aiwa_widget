@@ -399,6 +399,47 @@ class HealthActivity : ComponentActivity() {
 }
 
 /**
+ * What to do with what Claude sent, in the "Aiwa" mode: read its code first, or go and open it. A contract
+ * (HTML) is read here and published on the Aiwa wallet page, which then offers the YourMine sphere pinned to
+ * it (that sphere exists only once the contract is published); a sphere (JS) is read here and opened in
+ * YourMine's submission field. Opened by OpenSphereActivity, for the widget, the card and the notification alike.
+ */
+class SphereTargetPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            val received = state.sphere
+            val contract = received?.kind == "aiwa"
+            val name = received?.name?.removeSuffix(".aiwa.html") ?: "ce que Claude a envoyé"
+            val entries = buildList {
+                add(PickerEntry(if (contract) "« $name » — contrat Aiwa (HTML)" else "« $name » — sphère YourMine (JS)", false, header = true) { })
+                add(PickerEntry(if (contract) "Voir le code du contrat (HTML)" else "Voir le code de la sphère (JS)", false) { view() })
+                add(
+                    PickerEntry(
+                        if (contract) "Publier dans Aiwa : la page wallet, contrat pré-rempli — la sphère YourMine s'y affiche après la publication"
+                        else "Ouvrir dans YourMine : le champ de soumission, sphère pré-remplie — rien n'est soumis pour toi",
+                        false, lines = 4,
+                    ) { openIt() },
+                )
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun view() {
+        startActivity(Intent(this, CodeViewActivity::class.java))
+        finish()
+    }
+
+    private fun openIt() {
+        startActivity(Intent(this, OpenSphereActivity::class.java).putExtra(EXTRA_OPEN_NOW, true))
+        finish()
+    }
+}
+
+/**
  * The documents of the "Aiwa" mode (DOC_CHOICES): the round button next to the mic opens this list, one
  * entry opens one document in the browser (the PDFs are files: the browser downloads them and offers to
  * open them). One button and a list rather than one button per document.

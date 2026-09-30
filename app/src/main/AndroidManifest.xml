@@ -79,6 +79,14 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <activity android:name=".SphereTargetPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+        <activity android:name=".CodeViewActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <activity android:name=".DocsPickerActivity" android:exported="false"
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""

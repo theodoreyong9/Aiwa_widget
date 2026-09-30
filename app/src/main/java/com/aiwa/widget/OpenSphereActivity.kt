@@ -1,4 +1,5 @@
 package com.aiwa.widget
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.glance.appwidget.updateAll
@@ -23,14 +24,31 @@ import kotlinx.coroutines.withContext
  * The YourMine sphere of that contract is not made here: it is pinned to the PUBLISHED contract
  * (its manifest id exists only after publication), so the Aiwa page offers it once published.
  *
+ * In the "Aiwa" mode (or when what arrived is a contract) the button first opens a short list
+ * (SphereTargetPickerActivity): see the code (CodeViewActivity), or go and open it. The list is
+ * skipped once a choice was made (EXTRA_OPEN_NOW), and in the plain sphere mode, where the button
+ * keeps opening YourMine at once.
+ *
  * The code also goes to the clipboard, always: a page that does not yet know the hand-off
  * (its fragment is ignored there) simply opens, and the code is one paste away.
  */
+// Set by the list once the user chose "open": no question asked again.
+const val EXTRA_OPEN_NOW = "open_now"
+
 class OpenSphereActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         wakeAiwa(applicationContext)
         val app = applicationContext
+        // The widget, the lock-screen card and the notification all open THIS activity: the question is asked
+        // here, once, for all of them — only when something was received, and in the Aiwa context.
+        val now = AiwaRepository.state.value
+        val received = now.sphere
+        if (!intent.getBooleanExtra(EXTRA_OPEN_NOW, false) && received != null && (received.kind == "aiwa" || now.deploy == "aiwa")) {
+            startActivity(Intent(this, SphereTargetPickerActivity::class.java))
+            finish()
+            return
+        }
         CoroutineScope(Dispatchers.Main).launch {
             val bridge = LocalClaudeBridge()
             val sphere = try {

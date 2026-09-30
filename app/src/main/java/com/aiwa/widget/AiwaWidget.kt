@@ -216,7 +216,7 @@ private fun FullContent(state: AiwaState) {
         state.status == AiwaState.Status.WORKING -> { status = "Envoi en cours…"; statusColor = fg }
         state.waiting -> { status = "● Claude attend ta réponse"; statusColor = alertText; statusBold = true }
         sphereReady -> {
-            status = if (aiwaMode) "App Aiwa prête : touche le bouton A pour la publier" else "⬡ Sphère prête : touche ⬡ pour l'ouvrir"
+            status = if (aiwaMode) "App Aiwa prête : touche le bouton A pour la voir ou la publier" else "⬡ Sphère prête : touche ⬡ pour l'ouvrir"
             statusColor = fg
             statusBold = true
         }
@@ -336,7 +336,7 @@ private fun FullContent(state: AiwaState) {
                     // Build → Apps with the code in the field (OpenSphereActivity).
                     RoundButton(
                         icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
-                        description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
+                        description = if (aiwaMode) "Voir ou publier l'app (Aiwa)" else "Ouvrir la sphère dans YourMine",
                         background = if (sphereReady) claudeOrange else pill,
                         action = actionStartActivity<OpenSphereActivity>(),
                         diameter = chipH.dp,
@@ -564,7 +564,7 @@ private fun CompactContent(state: AiwaState) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         RoundButton(
                             icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
-                            description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
+                            description = if (aiwaMode) "Voir ou publier l'app (Aiwa)" else "Ouvrir la sphère dans YourMine",
                             background = if (sphereReady) claudeOrange else pill,
                             action = actionStartActivity<OpenSphereActivity>(),
                         )
