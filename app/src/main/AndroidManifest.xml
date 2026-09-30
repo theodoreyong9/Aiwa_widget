@@ -83,6 +83,16 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <!-- The one-time set-up (SetupActivity.kt): the launcher opens it when the widget
+             is put on the screen, and the widget opens it while a permission is missing. -->
+        <activity android:name=".SetupActivity" android:exported="true"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
         <activity android:name=".ExtraReposPickerActivity" android:exported="false"
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""

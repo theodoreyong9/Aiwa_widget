@@ -1,6 +1,14 @@
 package com.aiwa.widget
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+
+const val TERMUX_RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
+
+/** Whether Aiwa may ask Termux to run commands (a permission the user grants once). */
+fun hasTermuxPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, TERMUX_RUN_COMMAND_PERMISSION) == PackageManager.PERMISSION_GRANTED
 
 private const val TERMUX_PACKAGE = "com.termux"
 private const val RUN_COMMAND_SERVICE = "com.termux.app.RunCommandService"

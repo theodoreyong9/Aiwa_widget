@@ -634,6 +634,10 @@ def cloud_send(text, command=False):
             _ensure_cloud_repo()
         extra_text, fingerprint = _compose({}, repo, work, base, direct_now)
         task = text + extra_text
+        # Claude's own title for the session is made from this first message: the
+        # name Aiwa shows is written in it, besides the /rename queued after the
+        # creation (which the CLI accepts but whose execution can't be checked).
+        task += f"\n\n[Aiwa] Nom de cette session, tel qu'Aiwa l'affiche : « {title} ». Utilise exactement ce nom comme titre de la session."
         if task.lstrip().startswith("-"):
             task = "Message : " + task
         with lock:

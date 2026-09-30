@@ -147,7 +147,7 @@ class ModelPickerActivity : ComponentActivity() {
                 BackendSync.refresh(bridge)
             }
             val entries = buildList {
-                add(PickerEntry("Modèle — envoyé à la session (/model). La pastille de l'appli Claude ne suit pas ce choix.", false, header = true) { })
+                add(PickerEntry("Modèle — envoyé à la session (/model)", false, header = true) { })
                 MODEL_CHOICES.forEach { choice ->
                     add(PickerEntry(choice.label, choice.id == state.model) { pickModel(choice.id) })
                 }

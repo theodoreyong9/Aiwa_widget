@@ -188,10 +188,14 @@ private fun FullContent(state: AiwaState) {
     // seconds) it says so; while Claude waits for an answer (it pinged the relay)
     // it says that in red, the Claude button turns red and the card gets a red
     // edge: the alert is the widget itself, not a notification.
+    // Before anything else: Aiwa may not start the backend yet (its permission is
+    // asked once, by the set-up window the widget opens).
+    val needsSetup = !hasTermuxPermission(LocalContext.current)
     val status: String
     val statusColor: ColorProvider
     var statusBold = false
     when {
+        needsSetup -> { status = "Touche ici pour autoriser Aiwa (une seule fois)"; statusColor = alertText; statusBold = true }
         state.backend == "starting" -> { status = "⏳ Démarrage du backend…"; statusColor = warm }
         state.backend == "down" -> { status = "⚠ Backend arrêté — relance en cours"; statusColor = alertText; statusBold = true }
         state.status == AiwaState.Status.WORKING -> { status = "Envoi en cours…"; statusColor = fg }
@@ -199,7 +203,7 @@ private fun FullContent(state: AiwaState) {
         else -> { status = "Prêt"; statusColor = subtle }
     }
     val titleRoom = avail - avatar - 8f - (if (hasSession) avatar + 8f else 0f)
-    val title = fitLabel(state.session, titleRoom - textWidth(" ▾", fontScale * 1.25f), fontScale * 1.25f) + " ▾"
+    val title = if (needsSetup) "Autoriser Aiwa ▸" else fitLabel(state.session, titleRoom - textWidth(" ▾", fontScale * 1.25f), fontScale * 1.25f) + " ▾"
     val statusText = fitLabel(status, titleRoom, fontScale * 0.92f)
 
     // ---- band 2: repository and model, half the width each -----------------
@@ -242,7 +246,7 @@ private fun FullContent(state: AiwaState) {
             )
             Spacer(GlanceModifier.width(8.dp))
             Column(
-                modifier = GlanceModifier.defaultWeight().clickable(actionStartActivity<SessionPickerActivity>()),
+                modifier = GlanceModifier.defaultWeight().clickable(if (needsSetup) actionStartActivity<SetupActivity>() else actionStartActivity<SessionPickerActivity>()),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(title, style = TextStyle(color = fg, fontSize = 15.sp, fontWeight = FontWeight.Bold), maxLines = 1)
@@ -360,7 +364,9 @@ private fun CompactContent(state: AiwaState) {
     // progress. The backend's own state comes first: with it down or starting,
     // nothing else on the widget can be trusted to work, and a widget that just
     // sits there looks broken.
+    val needsSetup = !hasTermuxPermission(LocalContext.current)
     val sessionLabel = when {
+        needsSetup -> "Autoriser Aiwa"
         state.backend == "starting" -> "⏳ Démarrage"
         state.backend == "down" -> "⚠ Arrêté"
         state.status == AiwaState.Status.WORKING -> "Envoi…"
@@ -392,7 +398,7 @@ private fun CompactContent(state: AiwaState) {
                 modifier = GlanceModifier.size(36.dp).clickable(actionStartActivity<MainActivity>()),
             )
             Spacer(GlanceModifier.width(GAP.dp))
-            Chip(sessionText, pill, fg, actionStartActivity<SessionPickerActivity>(), GlanceModifier.defaultWeight(), bold = true, alignStart = true)
+            Chip(sessionText, pill, fg, if (needsSetup) actionStartActivity<SetupActivity>() else actionStartActivity<SessionPickerActivity>(), GlanceModifier.defaultWeight(), bold = true, alignStart = true)
             Spacer(GlanceModifier.width(GAP.dp))
             Box(
                 modifier = GlanceModifier.size(40.dp)

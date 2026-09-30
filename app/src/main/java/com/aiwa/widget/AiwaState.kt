@@ -19,7 +19,8 @@ data class ModelChoice(val id: String?, val label: String)
 // new cloud session is created, and `/model <id>` sent to the open session
 // (confirmed on a device: the session answers "Set model to ..."). null id =
 // the account's default ("/model default", currently Opus 5.5). The Claude
-// app's own model chip does NOT follow /model — Aiwa can't drive it.
+// app's own model chip lagged one step behind /model at first; the user reports
+// it follows now (unverified here).
 val MODEL_CHOICES = listOf(
     ModelChoice(null, "Auto (défaut du compte)"),
     ModelChoice("claude-fable-5-1", "Fable 5.1"),
