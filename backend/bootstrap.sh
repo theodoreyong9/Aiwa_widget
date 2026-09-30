@@ -37,25 +37,10 @@ if ! grep -q "^allow-external-apps *= *true" "$PROPS" 2>/dev/null; then
   termux-reload-settings || true
 fi
 
-# Folds the APK install/update into this same one command, instead of
-# needing a separate manual "open GitHub in a browser, download,
-# install" step — reported live as an actual usability complaint.
-# Android still requires a real, explicit tap on its own installer
-# prompt for a sideloaded APK (termux-open just hands off to that
-# system UI, it cannot silently install anything on its own — the same
-# kind of real OS security gate as the RUN_COMMAND permission
-# elsewhere in this project), so this can prompt but not finish the
-# install unattended.
+# The APK install/update is folded into this same one command (see install-apk.sh for what it checks and
+# where it leaves the file). What it says is kept in a file, because the rest of this script is long and ends
+# with the server's own output: setup-termux-proot.sh prints that last line again right before it starts.
 echo "== Downloading the latest Aiwa APK =="
-APK_PATH="$HOME/aiwa-debug.apk"
-# The APK is a file of the rolling GitHub release (the committed copy is the fallback for older builds).
-if curl -fsSL -o "$APK_PATH" https://github.com/theodoreyong9/Aiwa_widget/releases/download/android-latest/Aiwa_widget.apk \
-  || curl -fsSL -o "$APK_PATH" https://raw.githubusercontent.com/theodoreyong9/aiwa_widget/main/aiwa-debug.apk; then
-  pkg install -y termux-api >/dev/null 2>&1 || true
-  echo "== Opening the Android installer — tap Install/Update when it appears =="
-  termux-open "$APK_PATH" || echo "Could not open the installer automatically (install the Termux:API app for this to work) — open $APK_PATH by hand from a file manager instead."
-else
-  echo "Could not download the APK (network issue?) — skipping. You can install it by hand later from https://github.com/theodoreyong9/Aiwa_widget/releases/download/android-latest/Aiwa_widget.apk"
-fi
+bash "$REPO_DIR/backend/install-apk.sh" 2>&1 | tee "$HOME/.aiwa_apk_last.txt" || true
 
 exec bash "$REPO_DIR/backend/setup-termux-proot.sh"

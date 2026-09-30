@@ -106,6 +106,29 @@ echo "(By hand, if you ever prefer: proot-distro login $DISTRO -- claude)"
 echo "== Preventing Android from killing Termux in the background =="
 termux-wake-lock || echo "termux-wake-lock unavailable — install the Termux:API app/package for this to work."
 
+# A backend started earlier (by the app, or by the last run of this script) still holds port 8787 and still
+# runs the OLD code, which an update just replaced on disk: starting a second one used to die with
+# "Address already in use" and leave the old one answering. Stop it first, and wait for the port to be free.
+echo "== Stopping a backend that is already running (it would keep the old code) =="
+pkill -f "[a]iwa_server.py" >/dev/null 2>&1 || true
+for i in $(seq 1 20); do
+  curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1 || break
+  sleep 0.5
+done
+
+# Something answers again: the app started a backend meanwhile, on the code that is now on disk. Nothing to add.
+if curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1; then
+  echo "A backend answers on 127.0.0.1:8787 (started meanwhile, with the updated code): nothing more to start."
+  [ -f "$HOME/.aiwa_apk_last.txt" ] && { echo "== The Aiwa APK (from the step at the start) =="; cat "$HOME/.aiwa_apk_last.txt"; }
+  exit 0
+fi
+
+# What the APK step said, again: it scrolled away under the long setup above.
+if [ -f "$HOME/.aiwa_apk_last.txt" ]; then
+  echo "== The Aiwa APK (from the step at the start) =="
+  cat "$HOME/.aiwa_apk_last.txt"
+fi
+
 echo "== Starting the Aiwa backend on 127.0.0.1:8787 (inside $DISTRO) =="
 echo "Leave this running for as long as you want the app to work."
-exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 /aiwa_widget/backend/aiwa_server.py
+exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 -u /aiwa_widget/backend/aiwa_server.py
