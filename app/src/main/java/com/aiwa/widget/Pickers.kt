@@ -399,6 +399,30 @@ class HealthActivity : ComponentActivity() {
 }
 
 /**
+ * The documents of the "Aiwa" mode (DOC_CHOICES): the round button next to the mic opens this list, one
+ * entry opens one document in the browser (the PDFs are files: the browser downloads them and offers to
+ * open them). One button and a list rather than one button per document.
+ */
+class DocsPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val entries = buildList {
+                add(PickerEntry("Documents Aiwa", false, header = true) { })
+                DOC_CHOICES.forEach { doc -> add(PickerEntry(doc.label, false, lines = 3) { open(doc.id) }) }
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun open(address: String?) {
+        if (address == null || !openUrl(applicationContext, address)) toastOnMain(this, "Impossible d'ouvrir le navigateur.")
+        finish()
+    }
+}
+
+/**
  * What Claude is asked to produce with the work: the widget's Deploy chip opens this list (it used
  * to cycle through the four states at each tap). Told to Claude with the next message.
  */
