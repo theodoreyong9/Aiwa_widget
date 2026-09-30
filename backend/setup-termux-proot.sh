@@ -129,6 +129,24 @@ if [ -f "$HOME/.aiwa_apk_last.txt" ]; then
   cat "$HOME/.aiwa_apk_last.txt"
 fi
 
-echo "== Starting the Aiwa backend on 127.0.0.1:8787 (inside $DISTRO) =="
-echo "Leave this running for as long as you want the app to work."
-exec proot-distro login "$DISTRO" --bind "$REPO_DIR:/aiwa_widget" -- python3 -u /aiwa_widget/backend/aiwa_server.py
+# Started in the BACKGROUND, detached from this window (the same start.sh the app uses through Termux's
+# RUN_COMMAND): this window can be closed, and is not needed again — the app starts the backend itself when it
+# is down. start.sh keeps one instance at a time, writes ~/aiwa_backend.log and takes the wake-lock.
+echo "== Starting the Aiwa backend in the background (inside $DISTRO) =="
+if command -v setsid >/dev/null 2>&1; then
+  setsid nohup bash "$REPO_DIR/backend/start.sh" >/dev/null 2>&1 < /dev/null &
+else
+  nohup bash "$REPO_DIR/backend/start.sh" >/dev/null 2>&1 < /dev/null &
+fi
+for i in $(seq 1 90); do
+  curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1 && break
+  sleep 1
+done
+if curl -sf http://127.0.0.1:8787/api/status >/dev/null 2>&1; then
+  echo "The Aiwa backend is running in the background (log: ~/aiwa_backend.log)."
+  echo "You can close Termux: the app starts the backend again by itself when it is down."
+else
+  echo "The backend did not answer within 90 seconds. Last lines of ~/aiwa_backend.log:"
+  tail -n 20 "$HOME/aiwa_backend.log" 2>/dev/null || echo "(no log: start.sh never ran)"
+  exit 1
+fi

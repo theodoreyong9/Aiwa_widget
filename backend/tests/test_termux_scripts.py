@@ -144,8 +144,19 @@ class ScriptSyntaxTests(unittest.TestCase):
 
     def test_setup_stops_the_running_backend_before_starting_another(self):
         text = (BACKEND / "setup-termux-proot.sh").read_text()
-        kill, start = text.index('pkill -f "[a]iwa_server.py"'), text.index("exec proot-distro login")
+        kill, start = text.index('pkill -f "[a]iwa_server.py"'), text.index('bash "$REPO_DIR/backend/start.sh"')
         self.assertLess(kill, start)
+
+    def test_setup_starts_the_backend_in_the_background_and_does_not_hold_the_window(self):
+        text = (BACKEND / "setup-termux-proot.sh").read_text()
+        self.assertIn("setsid nohup bash", text)
+        self.assertIn("< /dev/null &", text)
+        self.assertNotIn("exec proot-distro login", text)        # the old foreground start
+        self.assertNotIn("Leave this running", text)
+        self.assertIn("You can close Termux", text)
+
+    def test_the_apk_download_shows_no_progress_table(self):
+        self.assertIn("curl -fsSL", (BACKEND / "install-apk.sh").read_text())
 
 
 if __name__ == "__main__":

@@ -17,8 +17,9 @@ PART="$APK_PATH.part"
 MIN_BYTES=1000000
 
 rm -f "$PART"
+echo "APK: downloading…"
 got=0
-if curl -fL --retry 3 --connect-timeout 20 -o "$PART" "$APK_URL" && [ "$(wc -c < "$PART" 2>/dev/null || echo 0)" -ge "$MIN_BYTES" ]; then
+if curl -fsSL --retry 3 --connect-timeout 20 -o "$PART" "$APK_URL" && [ "$(wc -c < "$PART" 2>/dev/null || echo 0)" -ge "$MIN_BYTES" ]; then
   got=1
 fi
 if [ "$got" -ne 1 ]; then
