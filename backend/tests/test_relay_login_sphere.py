@@ -270,6 +270,9 @@ class InstructionTests(Base):
         self.assertIn(f"{srv.NTFY_SERVER}/{srv.waiting_topic}", text)
         self.assertIn("Ne la pousse sur AUCUN dépôt", text)
         self.assertIn(srv.SPHERE_README, text)
+        # a rewrite in YourMine's format, profile parts included — not a copy of some source
+        for wanted in ("réécriture", "Building a Sphere", "Profile as Infrastructure", "profileSection", "peerSection", "broadcastData"):
+            self.assertIn(wanted, text)
 
     def test_other_modes_do_not_mention_spheres(self):
         for mode in ("none", "pages", "android"):

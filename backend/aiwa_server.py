@@ -477,15 +477,19 @@ def _instruction_lines(repo, work, base, direct):
         lines.append((
             "deploy",
             "Déploiement (sphère YourMine) : le livrable est UNE sphère YourMine, un fichier `nom.sphere.js` "
-            "(nom court en minuscules : lettres, chiffres, `_` ou `-`). Son format est décrit dans "
-            f"{SPHERE_README} (section « Building a Sphere ») : lis-le avant d'écrire si tu ne le connais pas, "
-            "et inspire-toi d'une sphère existante listée dans files.json du même dépôt. "
+            "(nom court en minuscules : lettres, chiffres, `_` ou `-`). Ce n'est pas une copie d'un code de départ : c'est une réécriture "
+            "au format YourMine (une IIFE qui s'enregistre dans `window.YM_S['nom.sphere.js']`, avec `activate`, `deactivate` et `renderPanel`, "
+            f"et tout passe par `ctx`). Ce format est décrit dans {SPHERE_README} : lis-y les sections « Building a Sphere » (dont « Context API ») "
+            "et « Profile as Infrastructure » avant d'écrire, même si tu crois connaître le format, et inspire-toi d'une sphère existante listée "
+            "dans files.json du même dépôt. Côté profil : implémente `profileSection(container)` (ma fiche : stats, historique, réglages de la sphère) "
+            "et `peerSection(container, peerCtx)` (la fiche d'un pair) quand la sphère a quelque chose à y montrer, et `broadcastData()` "
+            "(moins de 500 octets) quand elle a un état de présence à partager ; si tu n'en mets pas, dis en une phrase pourquoi. "
             "Ne la pousse sur AUCUN dépôt et n'ouvre aucune pull request : je la relis moi-même dans le formulaire de publication de YourMine, "
             "sur mon téléphone, et c'est moi qui la soumets. Quand elle est prête, vérifie-la (`node --check nom.sphere.js` ; "
             "charge-la dans un navigateur si tu peux), puis envoie-la sur mon téléphone avec cette commande, telle quelle : "
             f"`curl -s -m 60 -T nom.sphere.js -H 'Filename: nom.sphere.js' -H 'Title: aiwa-sphere' {NTFY_SERVER}/{topic}` "
             "(un seul fichier par envoi ; si je te demande une correction, renvoie le fichier complet de la même façon ; "
-            "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait la sphère.",
+            "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait la sphère et ce qu'elle montre sur les profils.",
         ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
