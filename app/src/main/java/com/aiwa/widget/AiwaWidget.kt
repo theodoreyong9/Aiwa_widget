@@ -184,6 +184,8 @@ private fun FullContent(state: AiwaState) {
     val band = (size.height.value - 16f) / bands
     val chipH = (band - 6f).coerceIn(30f, 44f)
     val micH = (band - 4f).coerceIn(34f, 48f)
+    // The round document buttons of the "Aiwa" mode (three of them next to the mic): a little smaller than the mic.
+    val docSize = minOf(micH, 38f)
     val avatar = (band - 2f).coerceIn(34f, 44f)
 
     // ---- band 1: which conversation, and what is going on ------------------
@@ -362,8 +364,8 @@ private fun FullContent(state: AiwaState) {
         }
         // The main action, big: dictate. The grey button with its red recording dot.
         Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
-            // In the "Aiwa" mode the mic makes room, on its right, for the two reference documents:
-            // the yellow paper (the protocol) and the PDF of Jobber's docs.
+            // In the "Aiwa" mode the mic makes room, on its right, for the three documents: the yellow
+            // paper (the protocol), the PDF of Jobber's docs and the AIWA carousel.
             Box(
                 modifier = (if (aiwaMode) GlanceModifier.defaultWeight() else GlanceModifier.fillMaxWidth()).height(micH.dp)
                     .background(micGrey)
@@ -388,7 +390,7 @@ private fun FullContent(state: AiwaState) {
                     description = "Yellow paper : la spécification du protocole Aiwa",
                     background = pill,
                     action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(YELLOWPAPER_URL))),
-                    diameter = micH.dp,
+                    diameter = docSize.dp,
                 )
                 Spacer(GlanceModifier.width(GAP.dp))
                 RoundButton(
@@ -396,7 +398,15 @@ private fun FullContent(state: AiwaState) {
                     description = "PDF de Jobber : value-ontology",
                     background = pill,
                     action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(JOBBER_PDF_URL))),
-                    diameter = micH.dp,
+                    diameter = docSize.dp,
+                )
+                Spacer(GlanceModifier.width(GAP.dp))
+                RoundButton(
+                    icon = R.drawable.ic_slides,
+                    description = "Carrousel AIWA : 16 pages en PDF",
+                    background = pill,
+                    action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(CAROUSEL_PDF_URL))),
+                    diameter = docSize.dp,
                 )
             }
         }

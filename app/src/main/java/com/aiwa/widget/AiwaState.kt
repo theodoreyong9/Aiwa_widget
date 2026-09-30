@@ -50,10 +50,12 @@ val DEPLOY_CHOICES = listOf(
     ModelChoice("aiwa", "Aiwa — une app (contrat) publiée avec ton identité Aiwa, depuis la page du wallet (rien sur GitHub)"),
 )
 
-// The two documents the widget opens from the buttons next to the mic while the "Aiwa" mode is on: the yellow
-// paper (the protocol's specification, at the root of aiwa_project) and the PDF in Jobber's docs.
+// The three documents the widget opens from the buttons next to the mic while the "Aiwa" mode is on: the yellow
+// paper (the protocol's specification, at the root of aiwa_project), the PDF in Jobber's docs, and the 16-page
+// AIWA carousel (aiwa_project/docs).
 const val YELLOWPAPER_URL = "https://github.com/theodoreyong9/aiwa_project/blob/main/YELLOWPAPER.md"
 const val JOBBER_PDF_URL = "https://github.com/theodoreyong9/Jobber/raw/main/docs/value-ontology.pdf"
+const val CAROUSEL_PDF_URL = "https://github.com/theodoreyong9/aiwa_project/raw/main/docs/AIWA_carousel_16_pages_square_final.pdf"
 
 fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label?.substringBefore(" (") ?: id ?: "Auto"
 
