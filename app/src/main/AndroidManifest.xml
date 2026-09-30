@@ -79,6 +79,10 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <activity android:name=".DeployPickerActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <activity android:name=".RepoPickerActivity" android:exported="false"
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""

@@ -101,12 +101,12 @@ private fun fitLabel(text: String, room: Float, fontScale: Float): String {
     return if (out.isEmpty()) "…" else "$out…"
 }
 
-// The Deploy chip cycles none → pages → android → sphere → none at each tap.
+// The Deploy chip opens a list of what Claude is asked to produce (DeployPickerActivity).
 private fun deployLabel(mode: String) = when (mode) {
-    "pages" -> "Deploy ●"
-    "android" -> "Android ●"
-    "sphere" -> "Sphère ●"
-    else -> "Deploy ○"
+    "pages" -> "Pages ▾"
+    "android" -> "Android ▾"
+    "sphere" -> "Sphère ▾"
+    else -> "Deploy ▾"
 }
 
 // GitHub Actions only matter when the work is published from GitHub.
@@ -307,7 +307,7 @@ private fun FullContent(state: AiwaState) {
             Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
                 Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
                 Spacer(GlanceModifier.width(GAP.dp))
-                Chip(deployText, if (state.deploy != "none") green else pill, fg, actionRunCallback<CycleDeployCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
+                Chip(deployText, if (state.deploy != "none") green else pill, fg, actionStartActivity<DeployPickerActivity>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
                 if (fresh) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true, height = chipH.dp)
@@ -525,7 +525,7 @@ private fun CompactContent(state: AiwaState) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>())
                     Spacer(GlanceModifier.width(GAP.dp))
-                    Chip(deployText, if (state.deploy != "none") green else pill, fg, actionRunCallback<CycleDeployCallback>())
+                    Chip(deployText, if (state.deploy != "none") green else pill, fg, actionStartActivity<DeployPickerActivity>())
                     if (fresh) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true)
@@ -570,21 +570,10 @@ private fun CompactContent(state: AiwaState) {
     }
 }
 
-// The widget's "Push" (main / branch) and "Deploy" (none / GitHub Pages / Android / YourMine sphere) buttons change an instruction without opening anything.
+// The widget's "Push" (main / branch) button changes an instruction without opening anything ("Deploy" opens a list).
 class TogglePushMainCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         switchOptions(context, LocalClaudeBridge(), pushMain = !AiwaRepository.state.value.pushMain)
     }
 }
 
-class CycleDeployCallback : ActionCallback {
-    override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        val next = when (AiwaRepository.state.value.deploy) {
-            "none" -> "pages"
-            "pages" -> "android"
-            "android" -> "sphere"
-            else -> "none"
-        }
-        switchOptions(context, LocalClaudeBridge(), deploy = next)
-    }
-}

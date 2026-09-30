@@ -392,3 +392,30 @@ class HealthActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.Default).launch { AiwaWidget().updateAll(app) }
     }
 }
+
+/**
+ * What Claude is asked to produce with the work: the widget's Deploy chip opens this list (it used
+ * to cycle through the four states at each tap). Told to Claude with the next message.
+ */
+class DeployPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            val entries = buildList {
+                add(PickerEntry("Que doit produire Claude ? (dès le prochain message)", false, header = true) { })
+                DEPLOY_CHOICES.forEach { choice ->
+                    add(PickerEntry(choice.label, choice.id == state.deploy, lines = 3) { pick(choice.id) })
+                }
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun pick(mode: String?) {
+        val app = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { switchOptions(app, LocalClaudeBridge(), deploy = mode) }
+    }
+}

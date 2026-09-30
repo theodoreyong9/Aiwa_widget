@@ -41,6 +41,14 @@ val MODEL_CHOICES = listOf(
     ModelChoice("opusplan", "Opus plan (Opus, puis Sonnet)"),
 )
 
+// What Claude is asked to produce with the work (the widget's project-type chip, a list).
+val DEPLOY_CHOICES = listOf(
+    ModelChoice("none", "Aucun déploiement"),
+    ModelChoice("pages", "Site web — publié avec GitHub Pages"),
+    ModelChoice("android", "Application Android — l'APK dans une release GitHub"),
+    ModelChoice("sphere", "Sphère YourMine — écrite par Claude et ouverte dans YourMine (rien sur GitHub)"),
+)
+
 fun modelLabel(id: String?): String = MODEL_CHOICES.find { it.id == id }?.label?.substringBefore(" (") ?: id ?: "Auto"
 
 // The effort levels `/effort` and `claude --effort` accept (null = automatic).
