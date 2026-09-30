@@ -122,7 +122,7 @@ class KeepAliveService : Service() {
             loginNeeded -> "⚠ Claude n'est pas connecté — touche pour le connecter"
             state.status == AiwaState.Status.WORKING -> "Envoi en cours…"
             state.waiting -> "● Claude attend ta réponse"
-            sphereReady -> if (state.deploy == "aiwa") "App Aiwa prête — touche pour la voir ou la publier" else "⬡ Sphère prête — touche pour l'ouvrir dans YourMine"
+            sphereReady -> if (state.deploy == "aiwa") "App Aiwa prête — touche pour la publier" else "⬡ Sphère prête — touche pour l'ouvrir dans YourMine"
             else -> "Prêt"
         }
         val deploy = when (state.deploy) {
@@ -156,7 +156,7 @@ class KeepAliveService : Service() {
         val aiwa = sphere.kind == "aiwa"
         val notification = Notification.Builder(this, SPHERE_CHANNEL_ID)
             .setContentTitle(if (aiwa) "App Aiwa prête : ${sphere.name.removeSuffix(".aiwa.html")}" else "Sphère prête : ${sphere.name}")
-            .setContentText(if (aiwa) "Touche pour la voir ou la publier depuis la page Aiwa" else "Touche pour l'ouvrir dans YourMine")
+            .setContentText(if (aiwa) "Touche pour la publier depuis la page Aiwa" else "Touche pour l'ouvrir dans YourMine")
             .setSmallIcon(R.drawable.ic_sphere)
             .setContentIntent(tap)
             .setAutoCancel(true)

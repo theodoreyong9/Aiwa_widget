@@ -216,7 +216,7 @@ private fun FullContent(state: AiwaState) {
         state.status == AiwaState.Status.WORKING -> { status = "Envoi en cours…"; statusColor = fg }
         state.waiting -> { status = "● Claude attend ta réponse"; statusColor = alertText; statusBold = true }
         sphereReady -> {
-            status = if (aiwaMode) "App Aiwa prête : touche le bouton A pour la voir ou la publier" else "⬡ Sphère prête : touche ⬡ pour l'ouvrir"
+            status = if (aiwaMode) "App Aiwa prête : A la publie, </> montre son code" else "⬡ Sphère prête : touche ⬡ pour l'ouvrir"
             statusColor = fg
             statusBold = true
         }
@@ -258,8 +258,11 @@ private fun FullContent(state: AiwaState) {
     // asked for, or as soon as the address answers.
     val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
     val showSphere = hasRepo && !fresh && sphereMode
-    val showActions = hasRepo && !fresh && (publishesFromGithub(state.deploy) || state.ciState != null)
-    val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showSphere) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
+    // In the Aiwa mode nothing is published through GitHub: the round "GitHub Actions" button (the build of this
+    // repository) has no meaning there, and gives way to a button that shows the code Claude sent.
+    val showCode = showSphere && aiwaMode
+    val showActions = hasRepo && !fresh && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
+    val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showSphere) GAP + chipH else 0f) + (if (showCode) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
     val each = (avail - fixed - GAP) / 2f - 20f
     fun pick(full: String, short: String) = if (textWidth(full, fontScale) <= each) full else short
     val pushText = fitLabel(pick(if (state.pushMain) "Push main" else "Push branche", if (state.pushMain) "main" else "branche"), each, fontScale)
@@ -336,9 +339,20 @@ private fun FullContent(state: AiwaState) {
                     // Build → Apps with the code in the field (OpenSphereActivity).
                     RoundButton(
                         icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
-                        description = if (aiwaMode) "Voir ou publier l'app (Aiwa)" else "Ouvrir la sphère dans YourMine",
+                        description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
                         background = if (sphereReady) claudeOrange else pill,
                         action = actionStartActivity<OpenSphereActivity>(),
+                        diameter = chipH.dp,
+                    )
+                }
+                if (showCode) {
+                    Spacer(GlanceModifier.width(GAP.dp))
+                    // Orange = something was received and not opened yet; grey = nothing (yet). It opens the code, read-only.
+                    RoundButton(
+                        icon = R.drawable.ic_code,
+                        description = "Voir le code reçu de Claude",
+                        background = if (sphereReady) claudeOrange else pill,
+                        action = actionStartActivity<CodeViewActivity>(),
                         diameter = chipH.dp,
                     )
                 }
@@ -525,12 +539,16 @@ private fun CompactContent(state: AiwaState) {
             // deployment is asked for, or as soon as the address answers.
             val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
             val showSphere = hasRepo && !fresh && sphereMode
-            val showActions = hasRepo && !fresh && (publishesFromGithub(state.deploy) || state.ciState != null)
+            // In the Aiwa mode nothing is published through GitHub: the round "GitHub Actions" button (the build of this
+            // repository) has no meaning there, and gives way to a button that shows the code Claude sent.
+            val showCode = showSphere && aiwaMode
+            val showActions = hasRepo && !fresh && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
             var others = 0f
             if (hasRepo) others += GAP + chipWidth(pushText, fontScale) + GAP + chipWidth(deployText, fontScale)
             if (hasRepo && fresh) others += GAP + chipWidth(readyText, fontScale)
             if (showSite) others += GAP + 34f
             if (showSphere) others += GAP + 34f
+            if (showCode) others += GAP + 34f
             if (showActions) others += GAP + 34f
             val repoName = state.repo?.substringAfter('/')
             val repoText = if (repoName == null) {
@@ -564,9 +582,18 @@ private fun CompactContent(state: AiwaState) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         RoundButton(
                             icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
-                            description = if (aiwaMode) "Voir ou publier l'app (Aiwa)" else "Ouvrir la sphère dans YourMine",
+                            description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
                             background = if (sphereReady) claudeOrange else pill,
                             action = actionStartActivity<OpenSphereActivity>(),
+                        )
+                    }
+                    if (showCode) {
+                        Spacer(GlanceModifier.width(GAP.dp))
+                        RoundButton(
+                            icon = R.drawable.ic_code,
+                            description = "Voir le code reçu de Claude",
+                            background = if (sphereReady) claudeOrange else pill,
+                            action = actionStartActivity<CodeViewActivity>(),
                         )
                     }
                     if (showActions) {
