@@ -1,9 +1,20 @@
 package com.aiwa.bridge
 
 // state: off (no repository), waiting (the address doesn't answer yet) or live.
-// kind: "site" (the GitHub Pages address) or "apk" (the download address of the
-// Android APK, in the Android deploy mode).
+// kind: "site" (the GitHub Pages address), "apk" (the download address of the
+// Android APK, in the Android deploy mode) or "sphere" (no address: live means a sphere
+// sent by Claude has not been opened yet).
 data class SiteInfo(val url: String?, val state: String, val kind: String = "site")
+
+// A YourMine sphere Claude sent to the phone (its source: ClaudeBridge.sphereCode).
+// seen: it was opened in YourMine already.
+data class SphereInfo(val name: String, val size: Int, val ts: Long, val seen: Boolean)
+data class SphereCode(val name: String, val code: String)
+
+// The `claude auth login` the backend runs for the app. phase: idle / starting / url (the
+// page to open is there, a code is awaited) / checking / done / failed; message: what the
+// CLI said last, when it said something.
+data class LoginStep(val phase: String, val url: String?, val message: String)
 
 // state: running, success, failure or none.
 // fresh: a new green run the user has not been told about yet.
@@ -32,6 +43,12 @@ data class BackendStatus(
     val site: SiteInfo = SiteInfo(null, "off"),
     val ci: CiInfo? = null,
     val githubError: String? = null,
+    // Whether the CLI is logged in to a Claude account: ok / needed / unknown.
+    val claudeLogin: String = "unknown",
+    // Whether a command Claude runs in the cloud reaches the relay (its network access must
+    // allow ntfy.sh): ok / untested / pending / missing.
+    val relayCloud: String = "untested",
+    val sphere: SphereInfo? = null,
 )
 
 data class CloudSessionInfo(val id: String, val title: String, val url: String, val repo: String? = null)
@@ -70,4 +87,30 @@ interface ClaudeBridge {
 
     // The block of instructions Claude Code would receive with the next message.
     suspend fun instructions(): String
+
+    // ---- Connecting the CLI to a Claude account (the app's "Connecter Claude" window) ----
+
+    // What the running login is up to (idle when none).
+    suspend fun claudeLoginState(): LoginStep
+
+    // Starts a login and waits for the page to open (phase url) — or for its failure.
+    suspend fun claudeLoginStart(): LoginStep
+
+    // Gives the code the login page shows; answers when the CLI has decided.
+    suspend fun claudeLoginCode(code: String): LoginStep
+
+    suspend fun claudeLoginCancel()
+
+    // A fresh look at whether the CLI is logged in: ok / needed / unknown.
+    suspend fun claudeCheck(): String
+
+    // Asks the current session to run the relay test again. Throws with the reason.
+    suspend fun relayRetest()
+
+    // ---- The sphere Claude sent ----
+
+    // Throws when none was received.
+    suspend fun sphereCode(): SphereCode
+
+    suspend fun sphereSeen()
 }

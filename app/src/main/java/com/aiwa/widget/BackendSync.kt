@@ -61,6 +61,9 @@ object BackendSync {
                     ciUrl = status.ci?.url,
                     ciFresh = status.ci?.fresh ?: false,
                     githubError = status.githubError,
+                    claudeLogin = status.claudeLogin,
+                    relayCloud = status.relayCloud,
+                    sphere = status.sphere,
                 )
             }
         }

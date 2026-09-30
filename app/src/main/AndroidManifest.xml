@@ -97,6 +97,23 @@
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""
             android:excludeFromRecents="true" />
+        <!-- "Connecter Claude" (ClaudeLoginActivity.kt): the user leaves for the browser and must come
+             back to the SAME window, so it stays in the recent apps and is single-task. -->
+        <activity android:name=".ClaudeLoginActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize" />
+        <!-- "État d'Aiwa" (HealthActivity in Pickers.kt), and the widget's sphere button
+             (OpenSphereActivity.kt: opens YourMine with the sphere Claude sent). -->
+        <activity android:name=".HealthActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+        <activity android:name=".OpenSphereActivity" android:exported="false"
+            android:theme="@style/Theme.Dictate"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
         <activity android:name=".OpenResultActivity" android:exported="false"
             android:theme="@style/Theme.Dictate"
             android:taskAffinity=""

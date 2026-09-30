@@ -101,12 +101,16 @@ private fun fitLabel(text: String, room: Float, fontScale: Float): String {
     return if (out.isEmpty()) "…" else "$out…"
 }
 
-// The Deploy chip cycles none → pages → android → none at each tap.
+// The Deploy chip cycles none → pages → android → sphere → none at each tap.
 private fun deployLabel(mode: String) = when (mode) {
     "pages" -> "Deploy ●"
     "android" -> "Android ●"
+    "sphere" -> "Sphère ●"
     else -> "Deploy ○"
 }
+
+// GitHub Actions only matter when the work is published from GitHub.
+private fun publishesFromGithub(deploy: String) = deploy == "pages" || deploy == "android"
 
 
 // Every button of the widget is one of these two shapes (34 dp high in the
@@ -191,6 +195,13 @@ private fun FullContent(state: AiwaState) {
     // Before anything else: Aiwa may not start the backend yet (its permission is
     // asked once, by the set-up window the widget opens).
     val needsSetup = !hasTermuxPermission(LocalContext.current)
+    // The CLI is not logged in to a Claude account: nothing can be sent until it is.
+    val needsLogin = state.claudeLogin == "needed"
+    // The Deploy chip is on "Sphère": a sphere Claude sent is waiting to be opened in YourMine.
+    val sphereMode = state.deploy == "sphere"
+    val sphereReady = sphereMode && state.sphere?.seen == false
+    // Claude's cloud environment does not reach the relay: the alert "Claude attend" can't come.
+    val relayHint = state.relayCloud == "missing" && hasSession && !relayHintDismissed(LocalContext.current)
     val status: String
     val statusColor: ColorProvider
     var statusBold = false
@@ -198,13 +209,27 @@ private fun FullContent(state: AiwaState) {
         needsSetup -> { status = "Touche ici pour autoriser Aiwa (une seule fois)"; statusColor = alertText; statusBold = true }
         state.backend == "starting" -> { status = "⏳ Démarrage du backend…"; statusColor = warm }
         state.backend == "down" -> { status = "⚠ Backend arrêté — relance en cours"; statusColor = alertText; statusBold = true }
+        needsLogin -> { status = "⚠ Claude n'est pas connecté — touche ici"; statusColor = alertText; statusBold = true }
         state.status == AiwaState.Status.WORKING -> { status = "Envoi en cours…"; statusColor = fg }
         state.waiting -> { status = "● Claude attend ta réponse"; statusColor = alertText; statusBold = true }
+        sphereReady -> { status = "⬡ Sphère prête : touche ⬡ pour l'ouvrir"; statusColor = fg; statusBold = true }
+        relayHint -> { status = "Prêt · alertes cloud bloquées — touche ici"; statusColor = warm }
         else -> { status = "Prêt"; statusColor = subtle }
     }
     val titleRoom = avail - avatar - 8f - (if (hasSession) avatar + 8f else 0f)
-    val title = if (needsSetup) "Autoriser Aiwa ▸" else fitLabel(state.session, titleRoom - textWidth(" ▾", fontScale * 1.25f), fontScale * 1.25f) + " ▾"
+    val title = when {
+        needsSetup -> "Autoriser Aiwa ▸"
+        needsLogin -> "Connecter Claude ▸"
+        else -> fitLabel(state.session, titleRoom - textWidth(" ▾", fontScale * 1.25f), fontScale * 1.25f) + " ▾"
+    }
     val statusText = fitLabel(status, titleRoom, fontScale * 0.92f)
+    // What a tap on the name and the status line opens: the fix for what is wrong, else the sessions.
+    val bandAction: Action = when {
+        needsSetup -> actionStartActivity<SetupActivity>()
+        needsLogin -> actionStartActivity<ClaudeLoginActivity>()
+        relayHint -> actionStartActivity<HealthActivity>()
+        else -> actionStartActivity<SessionPickerActivity>()
+    }
 
     // ---- band 2: repository and model, half the width each -----------------
     val half = (avail - GAP) / 2f - 20f
@@ -225,8 +250,9 @@ private fun FullContent(state: AiwaState) {
     // (https://<owner>.github.io/<repo>/): the globe is there once deployment is
     // asked for, or as soon as the address answers.
     val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
-    val showActions = hasRepo && !fresh && (state.deploy != "none" || state.ciState != null)
-    val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
+    val showSphere = hasRepo && !fresh && sphereMode
+    val showActions = hasRepo && !fresh && (publishesFromGithub(state.deploy) || state.ciState != null)
+    val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showSphere) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
     val each = (avail - fixed - GAP) / 2f - 20f
     fun pick(full: String, short: String) = if (textWidth(full, fontScale) <= each) full else short
     val pushText = fitLabel(pick(if (state.pushMain) "Push main" else "Push branche", if (state.pushMain) "main" else "branche"), each, fontScale)
@@ -246,7 +272,7 @@ private fun FullContent(state: AiwaState) {
             )
             Spacer(GlanceModifier.width(8.dp))
             Column(
-                modifier = GlanceModifier.defaultWeight().clickable(if (needsSetup) actionStartActivity<SetupActivity>() else actionStartActivity<SessionPickerActivity>()),
+                modifier = GlanceModifier.defaultWeight().clickable(bandAction),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(title, style = TextStyle(color = fg, fontSize = 15.sp, fontWeight = FontWeight.Bold), maxLines = 1)
@@ -294,6 +320,18 @@ private fun FullContent(state: AiwaState) {
                         description = if (state.siteKind == "apk") "Télécharger l'APK Android" else "Ouvrir le site",
                         background = if (live) claudeOrange else pill,
                         action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site))),
+                        diameter = chipH.dp,
+                    )
+                }
+                if (showSphere) {
+                    Spacer(GlanceModifier.width(GAP.dp))
+                    // Orange = a sphere Claude sent is waiting; grey = none (yet). It opens YourMine on
+                    // Build → Apps with the code in the field (OpenSphereActivity).
+                    RoundButton(
+                        icon = R.drawable.ic_sphere,
+                        description = "Ouvrir la sphère dans YourMine",
+                        background = if (sphereReady) claudeOrange else pill,
+                        action = actionStartActivity<OpenSphereActivity>(),
                         diameter = chipH.dp,
                     )
                 }
@@ -365,10 +403,14 @@ private fun CompactContent(state: AiwaState) {
     // nothing else on the widget can be trusted to work, and a widget that just
     // sits there looks broken.
     val needsSetup = !hasTermuxPermission(LocalContext.current)
+    val needsLogin = state.claudeLogin == "needed"
+    val sphereMode = state.deploy == "sphere"
+    val sphereReady = sphereMode && state.sphere?.seen == false
     val sessionLabel = when {
         needsSetup -> "Autoriser Aiwa"
         state.backend == "starting" -> "⏳ Démarrage"
         state.backend == "down" -> "⚠ Arrêté"
+        needsLogin -> "Connecter Claude"
         state.status == AiwaState.Status.WORKING -> "Envoi…"
         else -> state.session
     }
@@ -398,7 +440,15 @@ private fun CompactContent(state: AiwaState) {
                 modifier = GlanceModifier.size(36.dp).clickable(actionStartActivity<MainActivity>()),
             )
             Spacer(GlanceModifier.width(GAP.dp))
-            Chip(sessionText, pill, fg, if (needsSetup) actionStartActivity<SetupActivity>() else actionStartActivity<SessionPickerActivity>(), GlanceModifier.defaultWeight(), bold = true, alignStart = true)
+            Chip(
+                sessionText, pill, fg,
+                when {
+                    needsSetup -> actionStartActivity<SetupActivity>()
+                    needsLogin -> actionStartActivity<ClaudeLoginActivity>()
+                    else -> actionStartActivity<SessionPickerActivity>()
+                },
+                GlanceModifier.defaultWeight(), bold = true, alignStart = true,
+            )
             Spacer(GlanceModifier.width(GAP.dp))
             Box(
                 modifier = GlanceModifier.size(40.dp)
@@ -454,11 +504,13 @@ private fun CompactContent(state: AiwaState) {
             // (https://<owner>.github.io/<repo>/): the globe is there once
             // deployment is asked for, or as soon as the address answers.
             val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
-            val showActions = hasRepo && !fresh && (state.deploy != "none" || state.ciState != null)
+            val showSphere = hasRepo && !fresh && sphereMode
+            val showActions = hasRepo && !fresh && (publishesFromGithub(state.deploy) || state.ciState != null)
             var others = 0f
             if (hasRepo) others += GAP + chipWidth(pushText, fontScale) + GAP + chipWidth(deployText, fontScale)
             if (hasRepo && fresh) others += GAP + chipWidth(readyText, fontScale)
             if (showSite) others += GAP + 34f
+            if (showSphere) others += GAP + 34f
             if (showActions) others += GAP + 34f
             val repoName = state.repo?.substringAfter('/')
             val repoText = if (repoName == null) {
@@ -488,6 +540,15 @@ private fun CompactContent(state: AiwaState) {
                             action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(site))),
                         )
                     }
+                    if (showSphere) {
+                        Spacer(GlanceModifier.width(GAP.dp))
+                        RoundButton(
+                            icon = R.drawable.ic_sphere,
+                            description = "Ouvrir la sphère dans YourMine",
+                            background = if (sphereReady) claudeOrange else pill,
+                            action = actionStartActivity<OpenSphereActivity>(),
+                        )
+                    }
                     if (showActions) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         // The colour is how the last run went: green, red, grey (running or unknown).
@@ -509,7 +570,7 @@ private fun CompactContent(state: AiwaState) {
     }
 }
 
-// The widget's "Push" (main / branch) and "Deploy" (none / GitHub Pages / Android) buttons change an instruction without opening anything.
+// The widget's "Push" (main / branch) and "Deploy" (none / GitHub Pages / Android / YourMine sphere) buttons change an instruction without opening anything.
 class TogglePushMainCallback : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         switchOptions(context, LocalClaudeBridge(), pushMain = !AiwaRepository.state.value.pushMain)
@@ -521,6 +582,7 @@ class CycleDeployCallback : ActionCallback {
         val next = when (AiwaRepository.state.value.deploy) {
             "none" -> "pages"
             "pages" -> "android"
+            "android" -> "sphere"
             else -> "none"
         }
         switchOptions(context, LocalClaudeBridge(), deploy = next)

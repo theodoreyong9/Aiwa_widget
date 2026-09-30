@@ -173,6 +173,14 @@ color=MaterialTheme.colorScheme.onSecondaryContainer,
 )
 }
 if(note!=null)Text(note,style=MaterialTheme.typography.bodySmall,color=if(problem)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+// Two things that need a person, each with the way to do it (see ClaudeLoginActivity / HealthActivity).
+if(state.claudeLogin=="needed"){
+Button(onClick={context.startActivity(Intent(context,ClaudeLoginActivity::class.java))},modifier=Modifier.fillMaxWidth()){Text("Claude n'est pas connecté : connecter")}
+}
+if(state.relayCloud=="missing"&&!relayHintDismissed(context)){
+OutlinedButton(onClick={context.startActivity(Intent(context,HealthActivity::class.java))},modifier=Modifier.fillMaxWidth()){Text("Alertes du cloud bloquées : autoriser ntfy.sh")}
+}
+TextButton(onClick={context.startActivity(Intent(context,HealthActivity::class.java))}){Text("État d'Aiwa (Claude, alertes, permissions)")}
 OutlinedTextField(
 value=input,
 onValueChange={input=it},

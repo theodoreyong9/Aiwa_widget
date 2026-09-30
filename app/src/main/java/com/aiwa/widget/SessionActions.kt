@@ -289,3 +289,15 @@ fun openClaudeApp(context: Context): Boolean {
     }
     return opened
 }
+
+// The widget's "alertes cloud bloquées" hint can be dismissed for good (a user who does not
+// want the alerts): remembered on the phone, not in the backend.
+private const val HINTS_PREFS = "aiwa_hints"
+private const val RELAY_HINT_OFF = "relay_off"
+
+fun relayHintDismissed(context: Context): Boolean =
+    context.applicationContext.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE).getBoolean(RELAY_HINT_OFF, false)
+
+fun dismissRelayHint(context: Context) {
+    context.applicationContext.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE).edit().putBoolean(RELAY_HINT_OFF, true).apply()
+}

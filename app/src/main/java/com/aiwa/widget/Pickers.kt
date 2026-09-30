@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.glance.appwidget.updateAll
 import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.RepoInfo
 import kotlinx.coroutines.CoroutineScope
@@ -41,8 +42,8 @@ import kotlinx.coroutines.launch
 // windows (same translucent, own-task setup as DictateActivity) instead,
 // so the widget itself can stay a single compact row.
 
-// header: a section title, not something to tap.
-class PickerEntry(val label: String, val active: Boolean, val header: Boolean = false, val onClick: () -> Unit)
+// header: a section title, not something to tap. lines: how many lines the label may take.
+class PickerEntry(val label: String, val active: Boolean, val header: Boolean = false, val lines: Int = 2, val onClick: () -> Unit)
 
 @Composable
 private fun PickerSheet(entries: List<PickerEntry>, onDismiss: () -> Unit) {
@@ -71,7 +72,7 @@ private fun PickerSheet(entries: List<PickerEntry>, onDismiss: () -> Unit) {
                             Text(
                                 text = (if (entry.active) "●  " else "    ") + entry.label,
                                 color = if (entry.active) MaterialTheme.colorScheme.primary else Color.Unspecified,
-                                maxLines = 2,
+                                maxLines = entry.lines,
                                 modifier = Modifier.fillMaxWidth().clickable { entry.onClick() }
                                     .padding(horizontal = 20.dp, vertical = 14.dp),
                             )
@@ -284,5 +285,110 @@ class ExtraReposPickerActivity : ComponentActivity() {
     private fun toggle(repo: String?) {
         val appContext = applicationContext
         CoroutineScope(Dispatchers.Default).launch { switchExtraRepo(appContext, LocalClaudeBridge(), repo) }
+    }
+}
+
+/**
+ * "État d'Aiwa": what works and what is missing, each line saying what to do about it. Opened
+ * from the widget's status line when Claude's cloud environment does not reach the relay (the
+ * alerts "Claude attend ta réponse"), and from the app.
+ *
+ * The one thing Aiwa cannot do for the user: the relay (ntfy.sh) must be allowed in the network
+ * access of the cloud ENVIRONMENT, a setting that only claude.ai/code can change — there is no
+ * API or CLI for it. So the entry copies "ntfy.sh", opens claude.ai/code and says what to click.
+ */
+class HealthActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            LaunchedEffect(Unit) {
+                val bridge = LocalClaudeBridge()
+                ensureBackend(applicationContext, bridge)
+                BackendSync.refresh(bridge)
+            }
+            val entries = buildList {
+                add(PickerEntry("État d'Aiwa", false, header = true) { })
+                add(
+                    PickerEntry(
+                        if (state.backend == "up") "✓  Backend (Termux) : en marche"
+                        else "⚠  Backend " + (if (state.backend == "starting") "en démarrage…" else "arrêté") + " — toucher pour relancer",
+                        state.backend == "up",
+                    ) { restartBackend() },
+                )
+                when (state.claudeLogin) {
+                    "ok" -> add(PickerEntry("✓  Claude : connecté", true) { })
+                    "needed" -> add(PickerEntry("⚠  Claude n'est pas connecté — connecter…", false) { openLogin() })
+                    else -> add(PickerEntry("…  Claude : connexion pas vérifiée — vérifier ou connecter…", false) { openLogin() })
+                }
+                when (state.relayCloud) {
+                    "ok" -> add(PickerEntry("✓  Alertes du cloud : le relais ntfy.sh répond", true) { })
+                    "pending" -> add(PickerEntry("⏳  Alertes du cloud : test en cours (la réponse de Claude peut prendre une minute)…", false, lines = 3) { })
+                    "missing" -> {
+                        add(PickerEntry("⚠  Alertes du cloud bloquées : le cloud ne joint pas ntfy.sh — autoriser…", false, lines = 3) { allowRelay() })
+                        add(
+                            PickerEntry(
+                                "Sur claude.ai/code : ton environnement (la roue crantée) → Accès réseau « Custom » → Domaines autorisés : " +
+                                    "ajoute ntfy.sh (et coche « Also include default list » pour garder les autres). « ntfy.sh » est copié quand tu touches la ligne du dessus ; ensuite, « Retester ».",
+                                false, lines = 7,
+                            ) { },
+                        )
+                        add(PickerEntry("Retester maintenant (demandé à la session en cours)", false) { retest() })
+                        add(PickerEntry("Ne plus le rappeler dans le widget", false) { dismissHint() })
+                    }
+                    else -> {
+                        add(PickerEntry("…  Alertes du cloud : pas encore testées (le test part avec le premier message d'une nouvelle session)", false, lines = 3) { })
+                        add(PickerEntry("Tester maintenant (demandé à la session en cours)", false) { retest() })
+                    }
+                }
+                add(PickerEntry("Permissions Termux et notifications…", false) { go(SetupActivity::class.java) })
+                add(PickerEntry("Choisir la session…", false) { go(SessionPickerActivity::class.java) })
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun go(target: Class<*>) {
+        startActivity(Intent(this, target))
+        finish()
+    }
+
+    private fun openLogin() = go(ClaudeLoginActivity::class.java)
+
+    private fun restartBackend() {
+        startAiwaBackendViaTermux(applicationContext, forceRestart = true)
+        toastOnMain(this, "Relance du backend demandée à Termux (10 à 20 s).")
+        finish()
+    }
+
+    private fun allowRelay() {
+        copyToClipboard(this, "ntfy.sh")
+        if (!openUrl(applicationContext, "https://claude.ai/code")) toastOnMain(this, "Impossible d'ouvrir le navigateur : va sur claude.ai/code.")
+        else toastOnMain(this, "« ntfy.sh » est copié : colle-le dans les domaines autorisés de ton environnement.")
+        finish()
+    }
+
+    private fun retest() {
+        val app = applicationContext
+        finish()
+        CoroutineScope(Dispatchers.Default).launch {
+            val bridge = LocalClaudeBridge()
+            try {
+                bridge.relayRetest()
+                toastOnMain(app, "Test demandé à la session : la réponse de Claude peut prendre une minute.")
+            } catch (err: Exception) {
+                toastOnMain(app, "Test non envoyé : ${err.message}")
+            }
+            BackendSync.refresh(bridge)
+            AiwaWidget().updateAll(app)
+        }
+    }
+
+    private fun dismissHint() {
+        val app = applicationContext
+        dismissRelayHint(app)
+        finish()
+        CoroutineScope(Dispatchers.Default).launch { AiwaWidget().updateAll(app) }
     }
 }

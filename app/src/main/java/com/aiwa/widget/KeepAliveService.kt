@@ -27,9 +27,13 @@ import kotlinx.coroutines.launch
 private const val CHANNEL_ID = "aiwa_lockscreen"
 private const val OLD_CHANNEL_ID = "aiwa_keepalive"
 private const val NOTIFICATION_ID = 1
+// A sphere Claude sent gets a notification of its own (with a sound and on the lock screen): the
+// card below is silent and permanent, and a new sphere is news.
+private const val SPHERE_CHANNEL_ID = "aiwa_sphere"
+private const val SPHERE_NOTIFICATION_ID = 2
 
-/** What the lock-screen card says. */
-private data class Card(val title: String, val status: String, val detail: String, val opensClaude: Boolean)
+/** What the lock-screen card says, and what a tap on it opens. */
+private data class Card(val title: String, val status: String, val detail: String, val target: Class<*>)
 
 /**
  * Reported live: the widget's mic (DictateActivity) briefly flashing
@@ -58,7 +62,8 @@ private data class Card(val title: String, val status: String, val detail: Strin
  * the lock screen (the YourMine radio sphere does exactly that). It is a card with
  * the name of the session, what is going on ("Prêt", "Claude attend ta réponse"…), and
  * the logo; tapping it opens the dictation, or Claude's conversation while Claude
- * waits (the phone asks to unlock first). It is silent and permanent. No audio ever
+ * waits, or the fix when Claude is not connected, or the sphere Claude sent (the phone
+ * asks to unlock first). It is silent and permanent. No audio ever
  * plays: the session only reports a non-advancing "playing" state so that the
  * system keeps the card (a paused one is dropped after ten minutes).
  */
@@ -79,6 +84,9 @@ class KeepAliveService : Service() {
         channel.setShowBadge(false)
         channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         manager.createNotificationChannel(channel)
+        val sphereChannel = NotificationChannel(SPHERE_CHANNEL_ID, "Sphère reçue de Claude", NotificationManager.IMPORTANCE_HIGH)
+        sphereChannel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        manager.createNotificationChannel(sphereChannel)
         logo = BitmapFactory.decodeResource(resources, R.drawable.yourmine_logo)
         val mediaSession = MediaSession(this, "Aiwa")
         mediaSession.setCallback(object : MediaSession.Callback() {})
@@ -95,7 +103,10 @@ class KeepAliveService : Service() {
         publish(cardFor(AiwaRepository.state.value), first = true)
         // The card follows the state at once, not at the next poll.
         watcher = CoroutineScope(Dispatchers.Default).launch {
-            AiwaRepository.state.collect { publish(cardFor(it), first = false) }
+            AiwaRepository.state.collect {
+                publish(cardFor(it), first = false)
+                announceSphere(it)
+            }
         }
         if (poller?.isActive != true) poller = CoroutineScope(Dispatchers.IO).launch { pollBackend() }
     }
@@ -103,20 +114,53 @@ class KeepAliveService : Service() {
     // The same story as the widget's first band.
     private fun cardFor(state: AiwaState): Card {
         val hasSession = state.cloudSessionId != null || state.lastSessionId != null
+        val loginNeeded = state.claudeLogin == "needed"
+        val sphereReady = state.deploy == "sphere" && state.sphere?.seen == false
         val status = when {
             state.backend == "starting" -> "⏳ Démarrage du backend…"
             state.backend == "down" -> "⚠ Backend arrêté — relance en cours"
+            loginNeeded -> "⚠ Claude n'est pas connecté — touche pour le connecter"
             state.status == AiwaState.Status.WORKING -> "Envoi en cours…"
             state.waiting -> "● Claude attend ta réponse"
+            sphereReady -> "⬡ Sphère prête — touche pour l'ouvrir dans YourMine"
             else -> "Prêt"
         }
         val deploy = when (state.deploy) {
             "pages" -> "Deploy ●"
             "android" -> "Android ●"
+            "sphere" -> "Sphère ●"
             else -> "Deploy ○"
         }
+        val target: Class<*> = when {
+            loginNeeded -> ClaudeLoginActivity::class.java
+            state.waiting && hasSession -> OpenClaudeActivity::class.java
+            sphereReady -> OpenSphereActivity::class.java
+            else -> DictateActivity::class.java
+        }
         val detail = state.repo?.let { "⎇ ${it.substringAfter('/')} · " + (if (state.pushMain) "Push main" else "Push branche") + " · $deploy" } ?: "Aucun dépôt choisi"
-        return Card(state.session, status, detail, state.waiting && hasSession)
+        return Card(state.session, status, detail, target)
+    }
+
+    // A new sphere (not yet opened, not yet announced): a notification that opens it.
+    private fun announceSphere(state: AiwaState) {
+        val sphere = state.sphere ?: return
+        if (sphere.seen) return
+        val prefs = getSharedPreferences("aiwa_hints", MODE_PRIVATE)
+        if (prefs.getLong("sphere_told", 0L) == sphere.ts) return
+        prefs.edit().putLong("sphere_told", sphere.ts).apply()
+        val tap = PendingIntent.getActivity(
+            this, 1, Intent(this, OpenSphereActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = Notification.Builder(this, SPHERE_CHANNEL_ID)
+            .setContentTitle("Sphère prête : ${sphere.name}")
+            .setContentText("Touche pour l'ouvrir dans YourMine")
+            .setSmallIcon(R.drawable.ic_sphere)
+            .setContentIntent(tap)
+            .setAutoCancel(true)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(SPHERE_NOTIFICATION_ID, notification)
     }
 
     @Synchronized
@@ -124,10 +168,10 @@ class KeepAliveService : Service() {
         if (!first && card == shown) return
         shown = card
         val mediaSession = session ?: return
-        // A tap opens the dictation — or Claude's conversation while Claude waits.
-        val target = if (card.opensClaude) OpenClaudeActivity::class.java else DictateActivity::class.java
+        // A tap opens what the card is about: the dictation, Claude's conversation while Claude
+        // waits, the login when Claude is not connected, or the sphere Claude sent.
         val tap = PendingIntent.getActivity(
-            this, 0, Intent(this, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            this, 0, Intent(this, card.target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         mediaSession.setSessionActivity(tap)
@@ -203,7 +247,7 @@ class KeepAliveService : Service() {
 
     private fun widgetKey(): List<Any?> {
         val state = AiwaRepository.state.value
-        return listOf(state.backend, state.waiting, state.ciFresh, state.ciState, state.siteState, state.cloudSessionId, state.repo, state.extraRepos, state.model, state.pushMain, state.deploy, state.siteKind)
+        return listOf(state.backend, state.waiting, state.ciFresh, state.ciState, state.siteState, state.cloudSessionId, state.repo, state.extraRepos, state.model, state.pushMain, state.deploy, state.siteKind, state.claudeLogin, state.relayCloud, state.sphere)
     }
 
     override fun onDestroy() {

@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 15
+BACKEND_VERSION = 16
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -57,8 +57,27 @@ MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}")
 EXTRA_MAX = 600  # the user's own instruction text
 # The effort levels `/effort` and `claude --effort` accept (None = automatic).
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
-# A public relay Claude pings when it waits for an answer (see _compose).
+# A public relay Claude pings when it waits for an answer (see _compose). It is
+# also how a sphere and the relay test come back to the phone: Claude's replies
+# can't be read by a program, but a command it runs in the cloud can reach the relay.
 NTFY_SERVER = "https://ntfy.sh"
+# Where the spheres received from Claude are kept (the last ten), and the limits of one.
+SPHERE_DIR = Path.home() / ".aiwa_spheres"
+SPHERE_MAX = 2 * 1024 * 1024
+SPHERE_KEEP = 10
+# YourMine's own file naming: name.sphere.js, and the key in window.YM_S[...] is the same.
+SPHERE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,40}\.sphere\.js")
+SPHERE_KEY_RE = re.compile(r"YM_S\[\s*['\"]([^'\"]+\.sphere\.js)['\"]\s*\]")
+SPHERE_README = "https://raw.githubusercontent.com/theodoreyong9/YourMinedApp/main/README.md"
+# The page the CLI prints to log in with a Claude account (inside terminal escape codes).
+LOGIN_URL_RE = re.compile(r"https://claude\.(?:com|ai)/[^\s\x07\x1b]*oauth/authorize[^\s\x07\x1b]*")
+# What the CLI says when it is not (or no longer) logged in.
+LOGIN_NEEDED_RE = re.compile(
+    r"not logged in|run /login|login expired|unable to get organization uuid|api key authentication|not authenticated|authentication (?:failed|required|error)",
+    re.I,
+)
+# How long Claude gets to answer the relay test before the widget says it is missing.
+CLOUD_CHECK_WAIT = 240
 
 # A cloud session needs a git repository to start from. Documented: a
 # local repo with at least one commit is uploaded as a bundle, no GitHub
@@ -88,12 +107,13 @@ cloud_busy = False
 # current_repo: the repository new sessions start on ("owner/name"; None =
 # the plain chat); push_main: push straight to the main branch (otherwise
 # to a work branch); deploy_mode: none, pages (publish with GitHub Pages
-# through GitHub Actions) or android (build the APK with GitHub Actions and
-# publish it as a GitHub release); extra: free text. The alert instruction (ping the relay when you
+# through GitHub Actions), android (build the APK with GitHub Actions and
+# publish it as a GitHub release) or sphere (write a YourMine sphere and send it
+# to the phone, no GitHub); extra: free text. The alert instruction (ping the relay when you
 # wait for an answer) is always there — it is mandatory, not a switch.
 current_repo = None
 push_main = True
-DEPLOY_MODES = ("none", "pages", "android")
+DEPLOY_MODES = ("none", "pages", "android", "sphere")
 deploy_mode = "none"
 # Other repositories Claude may ALSO work on (checked in the widget's picker):
 # told to it in the instructions; the platform decides whether it can reach them.
@@ -108,6 +128,21 @@ waiting_topic = None
 waiting_lock = threading.Lock()
 waiting = {"since": None, "last_ping": None}
 github_error = None  # the last GitHub problem worth showing in the app
+# The account the CLI is logged in to: state is unknown / ok / needed, looked up in
+# the background (see _login_state). login_flow is the `claude auth login` run the
+# app drives from its "Connecter Claude" window: phase idle / starting / url /
+# checking / done / failed.
+login_lock = threading.Lock()
+claude_login = {"state": "unknown", "at": 0.0, "busy": False}
+login_flow = {"phase": "idle", "url": None, "message": "", "proc": None, "master": None, "text": "", "mark": 0}
+# Whether a command Claude runs in the cloud reaches the relay (the environment's
+# network access must allow ntfy.sh): when the test was asked, and when its answer came.
+# Persisted: a relay seen working stays confirmed.
+relay_cloud = {"asked": None, "ok": None}
+# The last sphere Claude sent: {"name", "size", "ts", "seen", "event"}; its source is
+# a file of SPHERE_DIR. And the last relay event handled, to resume after a restart.
+sphere = None
+relay_seen = {"id": None, "time": None}
 # Whether the Pages address of current_repo answers, probed in the background.
 site_lock = threading.Lock()
 site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
@@ -124,7 +159,7 @@ followup_lock = threading.Lock()
 
 def _load_state():
     global current_model, current_cloud, current_repo, push_main, deploy_mode, extra
-    global current_effort, waiting_topic, last_cloud
+    global current_effort, waiting_topic, last_cloud, sphere
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -151,6 +186,18 @@ def _load_state():
     ci_seen.clear()
     if isinstance(seen, dict):
         ci_seen.update({k: v for k, v in seen.items() if isinstance(k, str) and isinstance(v, int)})
+    checked = data.get("relay_cloud")
+    if isinstance(checked, dict):
+        relay_cloud.update({k: checked.get(k) if isinstance(checked.get(k), (int, float)) else None for k in ("asked", "ok")})
+    last = data.get("sphere")
+    sphere = None
+    if isinstance(last, dict) and isinstance(last.get("name"), str) and SPHERE_NAME_RE.fullmatch(last["name"]):
+        sphere = {"name": last["name"], "size": int(last.get("size") or 0), "ts": int(last.get("ts") or 0),
+                  "seen": last.get("seen") is True, "event": last.get("event") if isinstance(last.get("event"), str) else None}
+    handled = data.get("relay_seen")
+    if isinstance(handled, dict):
+        relay_seen.update(id=handled.get("id") if isinstance(handled.get("id"), str) else None,
+                          time=handled.get("time") if isinstance(handled.get("time"), int) else None)
     topic = data.get("topic")
     valid = isinstance(topic, str) and re.fullmatch(r"aiwa-[a-f0-9]{24}", topic)
     waiting_topic = topic if valid else "aiwa-" + secrets.token_hex(12)
@@ -167,6 +214,7 @@ def _save_state():
             "model": current_model, "cloud": current_cloud, "repo": current_repo,
             "push_main": push_main, "deploy": deploy_mode, "extra": extra, "extra_repos": extra_repos,
             "effort": current_effort, "topic": waiting_topic, "last_cloud": last_cloud, "ci_seen": ci_seen,
+            "relay_cloud": relay_cloud, "sphere": sphere, "relay_seen": relay_seen,
         }), encoding="utf-8")
     except OSError as err:
         print(f"[{_ts()}] could not save state: {err}", flush=True)
@@ -423,6 +471,22 @@ def _instruction_lines(repo, work, base, direct):
             "sans débordement ni élément cassé, et les parcours principaux fonctionnels. "
             "Dis-moi ce que tu as lu et vérifié, ce que tu n'as pas pu consulter (logs inaccessibles) et ce qui reste douteux.",
         ))
+    if deploy == "sphere":
+        # Not tied to a repository: a sphere is written, checked and sent to the phone,
+        # where the user reads it in YourMine's publish form and submits it themself.
+        lines.append((
+            "deploy",
+            "Déploiement (sphère YourMine) : le livrable est UNE sphère YourMine, un fichier `nom.sphere.js` "
+            "(nom court en minuscules : lettres, chiffres, `_` ou `-`). Son format est décrit dans "
+            f"{SPHERE_README} (section « Building a Sphere ») : lis-le avant d'écrire si tu ne le connais pas, "
+            "et inspire-toi d'une sphère existante listée dans files.json du même dépôt. "
+            "Ne la pousse sur AUCUN dépôt et n'ouvre aucune pull request : je la relis moi-même dans le formulaire de publication de YourMine, "
+            "sur mon téléphone, et c'est moi qui la soumets. Quand elle est prête, vérifie-la (`node --check nom.sphere.js` ; "
+            "charge-la dans un navigateur si tu peux), puis envoie-la sur mon téléphone avec cette commande, telle quelle : "
+            f"`curl -s -m 60 -T nom.sphere.js -H 'Filename: nom.sphere.js' -H 'Title: aiwa-sphere' {NTFY_SERVER}/{topic}` "
+            "(un seul fichier par envoi ; si je te demande une correction, renvoie le fichier complet de la même façon ; "
+            "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait la sphère.",
+        ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
     # random topic; the command is harmless when the network blocks it.
@@ -615,7 +679,9 @@ def cloud_send(text, command=False):
                 sent += extra_text
             result = _queue_followup(session_id, sent)
             if not result["ok"]:
+                _note_login_problem(result["error"])
                 return {"ok": False, "error": result["error"]}
+            _set_login_state("ok")
             if not command:
                 _save_cloud_session(session_id, title, result["url"], instr=fingerprint)
             return {"ok": True, "session_id": session_id, "url": result["url"]}
@@ -633,7 +699,10 @@ def cloud_send(text, command=False):
         else:
             _ensure_cloud_repo()
         extra_text, fingerprint = _compose({}, repo, work, base, direct_now)
-        task = text + extra_text
+        with lock:
+            asked_before = relay_cloud["asked"]
+        check_text = _relay_check_text()
+        task = text + extra_text + check_text
         # Claude's own title for the session is made from this first message: the
         # name Aiwa shows is written in it, besides the /rename queued after the
         # creation (which the CLI accepts but whose execution can't be checked).
@@ -668,7 +737,13 @@ def cloud_send(text, command=False):
             )
         if found is None:
             reason = "délai dépassé" if timed_out else f"aucun identifiant de session trouvé (code {code})"
+            _note_login_problem(output)
+            if check_text:
+                with lock:  # no session was created: the relay test was not asked after all
+                    relay_cloud["asked"] = asked_before
+                    _save_state()
             return {"ok": False, "error": reason + " — sortie : " + output.strip()[-600:]}
+        _set_login_state("ok")
         with lock:
             current_cloud = last_cloud = found
             _save_state()
@@ -695,10 +770,13 @@ def _site_snapshot():
     advance, and whether it answers: off (no repository), waiting or live.
     kind "site": the GitHub Pages address (https://<owner>.github.io/<repo>/);
     kind "apk": with the Android mode, the download address of the APK in the
-    rolling release. Probed in the background; this is called on every
-    /api/status."""
+    rolling release; kind "sphere": no address, "live" once a sphere sent by
+    Claude has not been opened yet. Probed in the background; this is called
+    on every /api/status."""
     with lock:
-        repo, mode = current_repo, deploy_mode
+        repo, mode, last = current_repo, deploy_mode, sphere
+    if mode == "sphere":
+        return {"url": None, "state": "live" if last and not last["seen"] else "waiting", "kind": "sphere"}
     if not repo:
         return {"url": None, "state": "off", "kind": "site"}
     kind = "apk" if mode == "android" else "site"
@@ -797,11 +875,341 @@ def _ping_seen(text):
     print(f"[{_ts()}] alert received from the relay: {text[:40]!r}", flush=True)
 
 
+# ---- The Claude account the CLI is logged in to ------------------------------
+
+def _claude_auth_status():
+    """Whether the CLI is logged in (True / False), None when it can't be told."""
+    try:
+        done = subprocess.run(["claude", "auth", "status", "--json"], capture_output=True, text=True, timeout=25)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = (done.stdout or "").strip()
+    try:
+        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except ValueError:
+        return None
+    return data.get("loggedIn") is True if isinstance(data, dict) else None
+
+
+def _set_login_state(state):
+    with login_lock:
+        claude_login.update(state=state, at=time.time())
+
+
+def _note_login_problem(output):
+    """A failed send whose text says "log in again" makes the widget ask for it."""
+    if isinstance(output, str) and LOGIN_NEEDED_RE.search(output):
+        _set_login_state("needed")
+
+
+def _login_probe():
+    logged = _claude_auth_status()
+    with login_lock:
+        claude_login["busy"] = False
+        claude_login.update(at=time.time(), **({"state": "ok" if logged else "needed"} if logged is not None else {}))
+
+
+def _login_state():
+    """ok / needed / unknown. Looked up in the background — starting `claude` is not
+    free on a phone — every ten minutes, every twenty seconds while it is 'needed'
+    (so the widget clears soon after a login made somewhere else)."""
+    with login_lock:
+        state, age = claude_login["state"], time.time() - claude_login["at"]
+        if not claude_login["busy"] and age > (20 if state == "needed" else 15 if state == "unknown" else 600):
+            claude_login["busy"] = True
+            threading.Thread(target=_login_probe, daemon=True).start()
+        return state
+
+
+def _login_snapshot():
+    with login_lock:
+        return {"phase": login_flow["phase"], "url": login_flow["url"], "message": login_flow["message"]}
+
+
+_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+
+
+def _login_lines(text):
+    """The readable lines of the CLI's screen (no escape codes, no login address)."""
+    lines = [re.sub(r"^Paste code here if prompted\s*>\s*", "", l.strip()) for l in github.clean(_OSC_RE.sub("", text)).splitlines()]
+    return [l for l in lines if l and "oauth/authorize" not in l]
+
+
+def _login_reader(proc, master):
+    """Reads what `claude auth login` prints: the address to open, then the outcome.
+    A refused code makes the CLI print "Login failed" and exit (seen with the real
+    CLI): a new login is then needed. Should it stay and ask again, the user may paste
+    another code after a few seconds."""
+    chunks = []
+    refused_at = None
+    while True:
+        try:
+            ready, _, _ = select.select([master], [], [], 1.0)
+        except (OSError, ValueError):
+            break
+        if ready:
+            try:
+                data = os.read(master, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            chunks.append(data)
+            text = b"".join(chunks).decode("utf-8", "replace")
+            with login_lock:
+                if login_flow["proc"] is not proc:
+                    return
+                login_flow["text"] = text
+                if login_flow["url"] is None:
+                    found = LOGIN_URL_RE.search(text)
+                    if found:
+                        login_flow.update(url=found.group(0), phase="url")
+                fresh = text[login_flow["mark"]:] if login_flow["phase"] == "checking" else ""
+                if fresh and re.search(r"login successful|logged in as|successfully logged", fresh, re.I):
+                    login_flow.update(phase="done", message="Connecté à Claude.")
+                    claude_login.update(state="ok", at=time.time())
+                elif fresh and re.search(r"invalid|expired|failed|error|denied|incorrect", fresh, re.I):
+                    lines = _login_lines(fresh)
+                    login_flow["message"] = (lines[-1] if lines else "Code refusé.")[:300]
+                    refused_at = refused_at or time.time()
+        elif proc.poll() is not None:
+            break
+        if refused_at is not None and proc.poll() is None and time.time() - refused_at > 3:
+            with login_lock:
+                if login_flow["proc"] is proc and login_flow["phase"] == "checking":
+                    login_flow["phase"] = "url"
+            refused_at = None
+    code = proc.wait()
+    with login_lock:
+        if login_flow["proc"] is not proc:
+            return
+        if login_flow["phase"] != "done":
+            if code == 0:
+                login_flow.update(phase="done", message="Connecté à Claude.")
+                claude_login.update(state="ok", at=time.time())
+            else:
+                lines = _login_lines(login_flow["text"])
+                login_flow.update(phase="failed", message=login_flow["message"] or (lines[-1] if lines else f"le CLI s'est arrêté (code {code})")[:300])
+        login_flow.update(proc=None, master=None)
+    try:
+        os.close(master)
+    except OSError:
+        pass
+
+
+def _login_cancel():
+    with login_lock:
+        proc = login_flow["proc"]
+        login_flow.update(phase="idle", url=None, message="", proc=None, master=None, text="", mark=0)
+    if proc is not None and proc.poll() is None:
+        _signal_group(proc, signal.SIGTERM)
+
+
+def _login_start():
+    """Starts `claude auth login` in a terminal of its own and waits for the address
+    it prints. The user opens it in a browser, approves, and gets a CODE to paste
+    (the redirect goes to platform.claude.com, not to the phone)."""
+    _login_cancel()
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 4000, 0, 0))  # wide: the address must not wrap
+    # A token given in the environment would win over the login: not for this one.
+    env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    env.update(TERM="xterm-256color", BROWSER="true")
+    try:
+        proc = subprocess.Popen(["claude", "auth", "login", "--claudeai"], env=env, stdin=slave, stdout=slave, stderr=slave, close_fds=True, start_new_session=True)
+    except OSError as err:
+        os.close(master)
+        os.close(slave)
+        with login_lock:
+            login_flow.update(phase="failed", message=f"claude est introuvable : {err}")
+        return _login_snapshot()
+    os.close(slave)
+    with login_lock:
+        login_flow.update(phase="starting", url=None, message="", proc=proc, master=master, text="", mark=0)
+    threading.Thread(target=_login_reader, args=(proc, master), daemon=True).start()
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        snapshot = _login_snapshot()
+        if snapshot["phase"] in ("url", "failed", "done"):
+            return snapshot
+        time.sleep(0.2)
+    return dict(_login_snapshot(), message="Le CLI n'a pas donné d'adresse de connexion (25 s).")
+
+
+def _login_code(code):
+    """Gives the code shown by the login page to the waiting CLI and waits for the verdict."""
+    code = (code or "").strip()
+    if not code or len(code) > 4000 or re.search(r"\s", code):
+        return dict(_login_snapshot(), message="Ce n'est pas un code de connexion (une seule suite de caractères, sans espace).")
+    with login_lock:
+        proc, master = login_flow["proc"], login_flow["master"]
+        ready = proc is not None and proc.poll() is None and login_flow["phase"] == "url"
+        if ready:
+            login_flow.update(phase="checking", message="", mark=len(login_flow["text"]))
+    if not ready:
+        return dict(_login_snapshot(), message="Aucune connexion en cours : ouvre d'abord la page de connexion.")
+    try:
+        os.write(master, code.encode() + b"\r")
+    except OSError as err:
+        with login_lock:
+            login_flow.update(phase="failed", message=f"impossible de donner le code au CLI : {err}")
+        return _login_snapshot()
+    deadline = time.time() + 45
+    while time.time() < deadline:
+        snapshot = _login_snapshot()
+        if snapshot["phase"] in ("done", "failed") or (snapshot["phase"] == "url" and snapshot["message"]):
+            return snapshot
+        time.sleep(0.25)
+    return dict(_login_snapshot(), message="Pas de réponse du CLI après 45 s.")
+
+
+# ---- What comes back through the relay ---------------------------------------
+
+def _relay_check_text(force=False):
+    """The test that tells whether Claude's cloud environment can reach the relay
+    (its network access must allow ntfy.sh — a setting only claude.ai can change):
+    added to the first message of a NEW session while the relay is unconfirmed, and
+    sent on its own by the app's "Retester". "" when already confirmed."""
+    with lock:
+        if relay_cloud["ok"] is not None and not force:
+            return ""
+        relay_cloud.update(asked=time.time(), ok=None)
+        topic = waiting_topic
+        _save_state()
+    return (
+        "\n\n[Aiwa] Test du relais, à faire tout de suite avant le reste : exécute "
+        f"`curl -s -m 8 -H 'Title: aiwa-check' -d ok {NTFY_SERVER}/{topic}` puis continue normalement ; "
+        "si le réseau la bloque, ignore l'erreur et ne t'y attarde pas."
+    )
+
+
+def _relay_cloud_state():
+    """ok (a command of Claude's reached the relay), pending (asked a moment ago),
+    missing (asked, nothing came: the environment probably blocks ntfy.sh) or untested."""
+    with lock:
+        asked, ok = relay_cloud["asked"], relay_cloud["ok"]
+    if ok is not None:
+        return "ok"
+    if asked is None:
+        return "untested"
+    return "pending" if time.time() - asked < CLOUD_CHECK_WAIT else "missing"
+
+
+def _cloud_check_seen():
+    with lock:
+        first = relay_cloud["ok"] is None
+        relay_cloud["ok"] = time.time()
+        _save_state()
+    if first:
+        print(f"[{_ts()}] the cloud environment reaches the relay", flush=True)
+
+
+def _sphere_name(name, code):
+    """The sphere's file name: the one it was sent under, else the key it registers."""
+    if SPHERE_NAME_RE.fullmatch(name or ""):
+        return name
+    found = SPHERE_KEY_RE.search(code)
+    if found and SPHERE_NAME_RE.fullmatch(found.group(1)):
+        return found.group(1)
+    return "sphere.sphere.js"
+
+
+def _sphere_received(event):
+    """A sphere Claude sent (`curl -T name.sphere.js … Title: aiwa-sphere`): ntfy turns
+    the file into an attachment, which is downloaded here and kept."""
+    global sphere
+    attachment = event.get("attachment") if isinstance(event.get("attachment"), dict) else None
+    try:
+        if attachment:
+            url = str(attachment.get("url") or "")
+            if not url.startswith(NTFY_SERVER + "/file/"):
+                raise ValueError("adresse de pièce jointe inattendue")
+            if isinstance(attachment.get("size"), int) and attachment["size"] > SPHERE_MAX:
+                raise ValueError("sphère trop grosse")
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "aiwa"}), timeout=30) as reply:
+                raw = reply.read(SPHERE_MAX + 1)
+            if len(raw) > SPHERE_MAX:
+                raise ValueError("sphère trop grosse")
+            code, sent_name = raw.decode("utf-8"), str(attachment.get("name") or "")
+        else:
+            code, sent_name = str(event.get("message") or ""), ""
+        if not code.strip():
+            raise ValueError("sphère vide")
+    except (OSError, ValueError) as err:  # UnicodeDecodeError is a ValueError
+        print(f"[{_ts()}] sphere from the relay not kept: {err}", flush=True)
+        return
+    name = _sphere_name(sent_name, code)
+    try:
+        SPHERE_DIR.mkdir(parents=True, exist_ok=True)
+        (SPHERE_DIR / name).write_text(code, encoding="utf-8")
+        for old in sorted(SPHERE_DIR.glob("*.sphere.js"), key=lambda f: f.stat().st_mtime, reverse=True)[SPHERE_KEEP:]:
+            old.unlink()
+    except OSError as err:
+        print(f"[{_ts()}] sphere could not be saved: {err}", flush=True)
+        return
+    with lock:
+        sphere = {"name": name, "size": len(code.encode("utf-8")), "ts": int(time.time()), "seen": False, "event": event.get("id")}
+        _save_state()
+    print(f"[{_ts()}] sphere received from the relay: {name} ({len(code)} chars)", flush=True)
+
+
+def _sphere_snapshot():
+    with lock:
+        return {k: sphere[k] for k in ("name", "size", "ts", "seen")} if sphere else None
+
+
+def _sphere_code():
+    with lock:
+        last = dict(sphere) if sphere else None
+    if last is None:
+        return {"ok": False, "error": "aucune sphère reçue"}
+    try:
+        code = (SPHERE_DIR / last["name"]).read_text(encoding="utf-8")
+    except OSError:
+        return {"ok": False, "error": "le fichier de la sphère est introuvable"}
+    return {"ok": True, "name": last["name"], "code": code}
+
+
+def _sphere_seen():
+    with lock:
+        if sphere:
+            sphere["seen"] = True
+            _save_state()
+
+
+def _relay_event(event):
+    """One message of the relay topic: a sphere (title aiwa-sphere, or a *.sphere.js
+    attachment), the relay test (title aiwa-check) or Claude's "I wait for you" ping."""
+    now = time.time()
+    with lock:
+        if event.get("id") and event.get("id") == relay_seen["id"]:
+            return  # the last one, replayed after a restart
+        relay_seen.update(id=event.get("id"), time=event["time"] if isinstance(event.get("time"), int) else int(now))
+        _save_state()
+    title = str(event.get("title") or "")
+    attachment = event.get("attachment")
+    named_sphere = isinstance(attachment, dict) and str(attachment.get("name") or "").endswith(".sphere.js")
+    if title == "aiwa-check":
+        _cloud_check_seen()
+    elif title == "aiwa-sphere" or named_sphere:
+        if sphere is None or sphere.get("event") != event.get("id"):
+            threading.Thread(target=_sphere_received, args=(event,), daemon=True).start()
+    else:
+        text = str(event.get("message", ""))
+        if isinstance(event.get("time"), int) and now - event["time"] > 120:
+            return  # a ping replayed long after the fact must not wake the alert again
+        _ping_seen(text)
+        if text != "test":  # "test" is Aiwa's own ping: it proves the phone side only
+            _cloud_check_seen()
+
+
 def _relay_listener():
-    """Listens to the relay topic Claude pings when it waits for an answer.
-    Forever, reconnecting with a growing pause: an unreachable relay just
-    means no alert."""
-    backoff, since = 5, str(int(time.time()))
+    """Listens to the relay topic Claude pings when it waits for an answer, and
+    through which its sphere and the relay test come back. Forever, reconnecting
+    with a growing pause: an unreachable relay just means no alert."""
+    backoff = 5
+    with lock:
+        since = str(relay_seen["time"]) if relay_seen["time"] else str(int(time.time()))
     while True:
         try:
             request = urllib.request.Request(f"{NTFY_SERVER}/{waiting_topic}/json?since={since}", headers={"User-Agent": "aiwa"})
@@ -812,10 +1220,12 @@ def _relay_listener():
                         event = json.loads(raw)
                     except ValueError:
                         continue
+                    if not isinstance(event, dict):
+                        continue
                     if event.get("id"):
                         since = event["id"]
                     if event.get("event") == "message":
-                        _ping_seen(str(event.get("message", "")))
+                        _relay_event(event)
         except (OSError, ValueError):
             pass
         time.sleep(backoff)
@@ -859,6 +1269,7 @@ class Handler(BaseHTTPRequestHandler):
                 "repo": repo, "push_main": direct, "deploy": deploy, "autodeploy": deploy != "none", "extra": own, "extra_repos": more,
                 "waiting": is_waiting, "alert_last": last_ping,
                 "site": _site_snapshot(), "ci": _ci_snapshot(), "github_error": problem,
+                "claude_login": _login_state(), "relay_cloud": _relay_cloud_state(), "sphere": _sphere_snapshot(),
             })
         elif self.path == "/api/cloud/sessions":
             self.reply_json(_load_cloud_sessions())
@@ -866,6 +1277,12 @@ class Handler(BaseHTTPRequestHandler):
             self.reply_json({"ok": True, "repos": _repo_choices()})
         elif self.path == "/api/instructions":
             self.reply_json({"text": _preview()})
+        elif self.path == "/api/claude/login":
+            self.reply_json(_login_snapshot())
+        elif self.path == "/api/sphere":
+            self.reply_json({"sphere": _sphere_snapshot()})
+        elif self.path == "/api/sphere/code":
+            self.reply_json(_sphere_code())
         else:
             self.send_error(404)
 
@@ -940,6 +1357,36 @@ class Handler(BaseHTTPRequestHandler):
             self.reply_json({"accepted": True})
         elif self.path == "/api/waiting/clear":
             _clear_waiting()
+            self.reply_json({"accepted": True})
+        elif self.path == "/api/claude/login/start":
+            self.reply_json(_login_start())
+        elif self.path == "/api/claude/login/code":
+            self.reply_json(_login_code(body))
+        elif self.path == "/api/claude/login/cancel":
+            _login_cancel()
+            self.reply_json({"accepted": True})
+        elif self.path == "/api/claude/check":
+            # Asked for by the app's set-up window: a fresh answer, not the cached one.
+            logged = _claude_auth_status()
+            if logged is not None:
+                _set_login_state("ok" if logged else "needed")
+            self.reply_json({"accepted": True, "claude_login": _login_state()})
+        elif self.path == "/api/relay/retest":
+            # Asks the CURRENT session to run the relay test again (a new session gets it
+            # with its first message on its own).
+            with lock:
+                session, before = current_cloud, dict(relay_cloud)
+            if not session:
+                self.reply_json({"accepted": False, "reason": "aucune session en cours : le test part avec la première réponse d'une nouvelle session"})
+                return
+            sent = cloud_send(_relay_check_text(force=True).strip(), command=True)
+            if sent.get("ok") is not True:
+                with lock:
+                    relay_cloud.update(before)  # nothing was asked after all
+                    _save_state()
+            self.reply_json({"accepted": sent.get("ok") is True, "reason": sent.get("error")})
+        elif self.path == "/api/sphere/seen":
+            _sphere_seen()
             self.reply_json({"accepted": True})
         elif self.path == "/api/waiting/test":
             try:
@@ -1038,6 +1485,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     _load_state()
+    _login_state()  # looks the login up in the background, so the first status already knows
     threading.Thread(target=_relay_listener, daemon=True).start()
     print(f"{time.strftime('%H:%M:%S')} Aiwa backend listening on http://{HOST}:{PORT}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

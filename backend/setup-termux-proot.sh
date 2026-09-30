@@ -98,10 +98,10 @@ fi
 claude --version
 '
 
-echo "== Logging into Claude Code (only needed once; follow its own prompts) =="
-echo "If this is the first time, run:"
-echo "  proot-distro login $DISTRO -- claude"
-echo "by hand to authenticate before continuing — the backend assumes you're already logged in."
+echo "== Claude account =="
+echo "Nothing to type here: once the Aiwa widget is on your home screen, it says"
+echo "\"Claude n'est pas connecté\" until you tap it and approve the login in your browser."
+echo "(By hand, if you ever prefer: proot-distro login $DISTRO -- claude)"
 
 echo "== Preventing Android from killing Termux in the background =="
 termux-wake-lock || echo "termux-wake-lock unavailable — install the Termux:API app/package for this to work."

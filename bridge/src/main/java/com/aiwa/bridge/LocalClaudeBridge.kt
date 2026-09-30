@@ -81,6 +81,11 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             site = SiteInfo(site?.str("url"), site?.str("state") ?: "off", site?.str("kind") ?: "site"),
             ci = run?.let { CiInfo(it.str("state") ?: "none", it.str("url"), it.optBoolean("fresh", false)) },
             githubError = json.str("github_error"),
+            claudeLogin = json.str("claude_login") ?: "unknown",
+            relayCloud = json.str("relay_cloud") ?: "untested",
+            sphere = json.optJSONObject("sphere")?.let {
+                SphereInfo(it.optString("name"), it.optInt("size", 0), it.optLong("ts", 0L), it.optBoolean("seen", false))
+            },
         )
     }
 
@@ -199,5 +204,39 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
 
     override suspend fun instructions(): String = withContext(Dispatchers.IO) {
         JSONObject(getText("/api/instructions")).optString("text", "")
+    }
+
+    private fun loginStep(raw: String): LoginStep {
+        val json = JSONObject(raw)
+        return LoginStep(json.optString("phase", "idle"), json.str("url"), json.optString("message", ""))
+    }
+
+    override suspend fun claudeLoginState(): LoginStep = withContext(Dispatchers.IO) { loginStep(getText("/api/claude/login")) }
+
+    override suspend fun claudeLoginStart(): LoginStep = withContext(Dispatchers.IO) { loginStep(postText("/api/claude/login/start", "")) }
+
+    override suspend fun claudeLoginCode(code: String): LoginStep = withContext(Dispatchers.IO) { loginStep(postText("/api/claude/login/code", code)) }
+
+    override suspend fun claudeLoginCancel() = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/claude/login/cancel", ""))
+    }
+
+    override suspend fun claudeCheck(): String = withContext(Dispatchers.IO) {
+        JSONObject(postText("/api/claude/check", "")).optString("claude_login", "unknown")
+    }
+
+    override suspend fun relayRetest() = withContext(Dispatchers.IO) {
+        val json = JSONObject(postText("/api/relay/retest", ""))
+        if (!json.optBoolean("accepted", false)) throw IllegalStateException(json.str("reason") ?: "le test n'a pas pu partir")
+    }
+
+    override suspend fun sphereCode(): SphereCode = withContext(Dispatchers.IO) {
+        val json = JSONObject(getText("/api/sphere/code"))
+        if (!json.optBoolean("ok", false)) throw IllegalStateException(json.str("error") ?: "aucune sphère reçue")
+        SphereCode(json.getString("name"), json.getString("code"))
+    }
+
+    override suspend fun sphereSeen() = withContext(Dispatchers.IO) {
+        requireAccepted(postText("/api/sphere/seen", ""))
     }
 }

@@ -21,6 +21,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+      # Before the build, so that a broken backend or link builder fails fast: the backend's
+      # relay / login / sphere logic against a fake ntfy and a fake `claude`, and the YourMine link.
+      - name: Backend tests
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s backend/tests
+      - run: gradle :bridge:testDebugUnitTest
       - run: gradle :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:

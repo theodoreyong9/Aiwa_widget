@@ -3,6 +3,7 @@ package com.aiwa.widget
 import android.content.Context
 import android.content.SharedPreferences
 import com.aiwa.bridge.CloudSessionInfo
+import com.aiwa.bridge.SphereInfo
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,7 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 15
+const val EXPECTED_BACKEND_VERSION = 16
 
 data class ModelChoice(val id: String?, val label: String)
 
@@ -73,7 +74,8 @@ data class AiwaState(
     // Other repositories Claude may ALSO work on (checked in the repository picker).
     val extraRepos: List<String> = emptyList(),
     val pushMain: Boolean = true,
-    // none / pages (GitHub Pages) / android (the APK as a GitHub release).
+    // none / pages (GitHub Pages) / android (the APK as a GitHub release) / sphere (a
+    // YourMine sphere sent to the phone, no GitHub).
     val deploy: String = "none",
     val extra: String = "",
     // Claude pinged the relay: it waits for an answer (the widget shows it).
@@ -83,8 +85,14 @@ data class AiwaState(
     val effort: String? = null,
     val siteUrl: String? = null,
     val siteState: String = "off",
-    // "site" or "apk": what siteUrl is (see SiteInfo).
+    // "site", "apk" or "sphere": what siteUrl is (see SiteInfo).
     val siteKind: String = "site",
+    // Whether the CLI is logged in to a Claude account (ok / needed / unknown), whether Claude's
+    // cloud environment reaches the relay (ok / untested / pending / missing), and the last
+    // sphere Claude sent (null = none yet).
+    val claudeLogin: String = "unknown",
+    val relayCloud: String = "untested",
+    val sphere: SphereInfo? = null,
     // The latest GitHub Actions run of the repository: running / success /
     // failure / none, with the link to that run (null = unknown).
     val ciState: String? = null,

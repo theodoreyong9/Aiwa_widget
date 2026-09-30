@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's "open the sphere in YourMine" button: YourMine's hexagon (⬡), drawn with strokes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="18dp" android:height="18dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M12,3 L19.8,7.5 L19.8,16.5 L12,21 L4.2,16.5 L4.2,7.5 Z M4.2,7.5 L12,12 L19.8,7.5 M12,12 L12,21" android:strokeColor="#FFFFFF" android:strokeWidth="1.8" android:strokeLineJoin="round" />
+</vector>
