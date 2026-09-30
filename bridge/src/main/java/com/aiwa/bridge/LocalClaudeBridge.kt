@@ -84,7 +84,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
             claudeLogin = json.str("claude_login") ?: "unknown",
             relayCloud = json.str("relay_cloud") ?: "untested",
             sphere = json.optJSONObject("sphere")?.let {
-                SphereInfo(it.optString("name"), it.optInt("size", 0), it.optLong("ts", 0L), it.optBoolean("seen", false))
+                SphereInfo(it.optString("name"), it.optInt("size", 0), it.optLong("ts", 0L), it.optBoolean("seen", false), it.optString("kind", "sphere"))
             },
         )
     }
@@ -233,7 +233,7 @@ class LocalClaudeBridge(private val baseUrl: String = "http://127.0.0.1:8787") :
     override suspend fun sphereCode(): SphereCode = withContext(Dispatchers.IO) {
         val json = JSONObject(getText("/api/sphere/code"))
         if (!json.optBoolean("ok", false)) throw IllegalStateException(json.str("error") ?: "aucune sphère reçue")
-        SphereCode(json.getString("name"), json.getString("code"))
+        SphereCode(json.getString("name"), json.getString("code"), json.optString("kind", "sphere"))
     }
 
     override suspend fun sphereSeen() = withContext(Dispatchers.IO) {

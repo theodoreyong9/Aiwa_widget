@@ -209,6 +209,78 @@ class SphereTests(Base):
         self.assertEqual(srv._relay_cloud_state(), "ok")
 
 
+CONTRACT = "<!doctype html><html><head><title>Demo App</title></head><body><script type=\"module\">/* an Aiwa contract */</script></body></html>\n" + "<!-- pad -->\n" * 300
+
+
+class AiwaContractTests(Base):
+    """The "aiwa" mode: Claude sends a contract (one self-contained index.html, name.aiwa.html)."""
+
+    def contract_event(self, event_id="c1", name="demo-app.aiwa.html", code=CONTRACT, **over):
+        return self.sphere_event(event_id, name, code, **dict({"title": "aiwa-app"}, **over))
+
+    def test_a_contract_sent_with_curl_is_kept_as_an_aiwa_contract(self):
+        srv._sphere_received(self.contract_event(), kind="aiwa")
+        snap = srv._sphere_snapshot()
+        self.assertEqual((snap["name"], snap["kind"]), ("demo-app.aiwa.html", "aiwa"))
+        self.assertEqual(srv._sphere_code(), {"ok": True, "name": "demo-app.aiwa.html", "code": CONTRACT, "kind": "aiwa"})
+
+    def test_the_relay_tells_the_two_kinds_apart_by_title_or_by_file_name(self):
+        srv._relay_event(self.contract_event("c1"))
+        self.assertTrue(wait_for(lambda: (srv._sphere_snapshot() or {}).get("kind") == "aiwa"))
+        srv._relay_event(self.sphere_event("s1"))
+        self.assertTrue(wait_for(lambda: (srv._sphere_snapshot() or {}).get("kind") == "sphere"))
+        untitled = self.contract_event("c2", name="other.aiwa.html")
+        untitled.pop("title")
+        srv._relay_event(untitled)
+        self.assertTrue(wait_for(lambda: (srv._sphere_snapshot() or {}).get("name") == "other.aiwa.html"))
+        self.assertEqual(srv._sphere_snapshot()["kind"], "aiwa")
+
+    def test_the_name_falls_back_to_the_title_of_the_page(self):
+        srv._sphere_received(self.contract_event(name="upload.bin", code="<title>My Token!</title><p>x"), kind="aiwa")
+        self.assertEqual(srv._sphere_snapshot()["name"], "my-token.aiwa.html")
+        srv._sphere_received(self.contract_event("c9", name="../../x", code="<p>no title here</p>"), kind="aiwa")
+        self.assertEqual(srv._sphere_snapshot()["name"], "app.aiwa.html")
+
+    def test_each_mode_only_lights_up_for_what_it_asked_for(self):
+        srv._sphere_received(self.contract_event(), kind="aiwa")
+        srv.deploy_mode = "aiwa"
+        self.assertEqual(srv._site_snapshot(), {"url": None, "state": "live", "kind": "aiwa"})
+        srv.deploy_mode = "sphere"
+        self.assertEqual(srv._site_snapshot()["state"], "waiting")  # a contract is no answer to "sphere"
+        srv._sphere_seen()
+        srv.deploy_mode = "aiwa"
+        self.assertEqual(srv._site_snapshot()["state"], "waiting")
+
+    def test_the_two_kinds_are_pruned_separately(self):
+        for n in range(13):
+            srv._sphere_received(self.contract_event(f"c{n}", name=f"app{n}.aiwa.html"), kind="aiwa")
+            time.sleep(0.01)
+        for n in range(3):
+            srv._sphere_received(self.sphere_event(f"s{n}", name=f"s{n}.sphere.js", code=SPHERE.replace("radio", f"s{n}")))
+            time.sleep(0.01)
+        self.assertEqual(len(list(srv.SPHERE_DIR.glob("*.aiwa.html"))), srv.SPHERE_KEEP)
+        self.assertEqual(len(list(srv.SPHERE_DIR.glob("*.sphere.js"))), 3)
+
+    def test_the_kind_survives_a_restart(self):
+        srv._sphere_received(self.contract_event(), kind="aiwa")
+        srv._save_state()
+        srv.sphere = None
+        srv._load_state()
+        self.assertEqual(srv._sphere_snapshot()["kind"], "aiwa")
+
+    def test_the_instruction_says_what_to_write_read_and_send(self):
+        srv.deploy_mode = "aiwa"
+        text = dict(srv._instruction_lines(None, None, None, True))["deploy"]
+        for wanted in ("-T nom.aiwa.html", "Title: aiwa-app", f"{srv.NTFY_SERVER}/{srv.waiting_topic}", "YELLOWPAPER.md",
+                       "channel-contract.html", "sandbox=", "Ne le pousse sur AUCUN dépôt", "defineContract"):
+            self.assertIn(wanted, text)
+        self.assertIn("raw.githubusercontent.com/theodoreyong9/aiwa_project/main/", text)
+        for mode in ("none", "pages", "android", "sphere"):
+            srv.deploy_mode = mode
+            joined = " ".join(t for _, t in srv._instruction_lines("o/r", "w", "main", True))
+            self.assertNotIn("aiwa-app", joined)
+
+
 class RelayTests(Base):
     def event(self, message="attend", **over):
         event = {"id": f"id{time.time_ns()}", "time": int(time.time()), "event": "message", "message": message}
@@ -544,6 +616,12 @@ class HttpTests(Base):
         self.assertEqual(self.call("/api/sphere/code")["code"], SPHERE)
         self.call("/api/sphere/seen", "")
         self.assertTrue(self.call("/api/status")["sphere"]["seen"])
+
+    def test_deploy_mode_aiwa_is_accepted(self):
+        self.call("/api/options", json.dumps({"deploy": "aiwa"}))
+        self.assertEqual(self.call("/api/status")["deploy"], "aiwa")
+        self.assertEqual(self.call("/api/status")["site"]["kind"], "aiwa")
+        self.call("/api/options", json.dumps({"deploy": "none"}))
 
     def test_deploy_mode_sphere_is_accepted(self):
         self.call("/api/options", json.dumps({"deploy": "sphere"}))

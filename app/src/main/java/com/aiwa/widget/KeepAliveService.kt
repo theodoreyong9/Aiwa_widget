@@ -27,8 +27,8 @@ import kotlinx.coroutines.launch
 private const val CHANNEL_ID = "aiwa_lockscreen"
 private const val OLD_CHANNEL_ID = "aiwa_keepalive"
 private const val NOTIFICATION_ID = 1
-// A sphere Claude sent gets a notification of its own (with a sound and on the lock screen): the
-// card below is silent and permanent, and a new sphere is news.
+// A sphere (or, in the "Aiwa" mode, a contract) Claude sent gets a notification of its own (with a
+// sound and on the lock screen): the card below is silent and permanent, and a new one is news.
 private const val SPHERE_CHANNEL_ID = "aiwa_sphere"
 private const val SPHERE_NOTIFICATION_ID = 2
 
@@ -84,7 +84,7 @@ class KeepAliveService : Service() {
         channel.setShowBadge(false)
         channel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         manager.createNotificationChannel(channel)
-        val sphereChannel = NotificationChannel(SPHERE_CHANNEL_ID, "Sphère reçue de Claude", NotificationManager.IMPORTANCE_HIGH)
+        val sphereChannel = NotificationChannel(SPHERE_CHANNEL_ID, "Sphère ou app reçue de Claude", NotificationManager.IMPORTANCE_HIGH)
         sphereChannel.lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         manager.createNotificationChannel(sphereChannel)
         logo = BitmapFactory.decodeResource(resources, R.drawable.yourmine_logo)
@@ -115,20 +115,21 @@ class KeepAliveService : Service() {
     private fun cardFor(state: AiwaState): Card {
         val hasSession = state.cloudSessionId != null || state.lastSessionId != null
         val loginNeeded = state.claudeLogin == "needed"
-        val sphereReady = state.deploy == "sphere" && state.sphere?.seen == false
+        val sphereReady = (state.deploy == "sphere" || state.deploy == "aiwa") && state.sphere?.seen == false && state.sphere?.kind == state.deploy
         val status = when {
             state.backend == "starting" -> "⏳ Démarrage du backend…"
             state.backend == "down" -> "⚠ Backend arrêté — relance en cours"
             loginNeeded -> "⚠ Claude n'est pas connecté — touche pour le connecter"
             state.status == AiwaState.Status.WORKING -> "Envoi en cours…"
             state.waiting -> "● Claude attend ta réponse"
-            sphereReady -> "⬡ Sphère prête — touche pour l'ouvrir dans YourMine"
+            sphereReady -> if (state.deploy == "aiwa") "App Aiwa prête — touche pour la publier" else "⬡ Sphère prête — touche pour l'ouvrir dans YourMine"
             else -> "Prêt"
         }
         val deploy = when (state.deploy) {
             "pages" -> "Deploy ●"
             "android" -> "Android ●"
             "sphere" -> "Sphère ●"
+            "aiwa" -> "Aiwa ●"
             else -> "Deploy ○"
         }
         val target: Class<*> = when {
@@ -152,9 +153,10 @@ class KeepAliveService : Service() {
             this, 1, Intent(this, OpenSphereActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val aiwa = sphere.kind == "aiwa"
         val notification = Notification.Builder(this, SPHERE_CHANNEL_ID)
-            .setContentTitle("Sphère prête : ${sphere.name}")
-            .setContentText("Touche pour l'ouvrir dans YourMine")
+            .setContentTitle(if (aiwa) "App Aiwa prête : ${sphere.name.removeSuffix(".aiwa.html")}" else "Sphère prête : ${sphere.name}")
+            .setContentText(if (aiwa) "Touche pour la publier depuis la page Aiwa" else "Touche pour l'ouvrir dans YourMine")
             .setSmallIcon(R.drawable.ic_sphere)
             .setContentIntent(tap)
             .setAutoCancel(true)

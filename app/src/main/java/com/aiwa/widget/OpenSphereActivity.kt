@@ -2,8 +2,10 @@ package com.aiwa.widget
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.glance.appwidget.updateAll
+import com.aiwa.bridge.AIWA_PROJECT_URL
 import com.aiwa.bridge.LocalClaudeBridge
 import com.aiwa.bridge.YOURMINE_URL
+import com.aiwa.bridge.aiwaContractUrl
 import com.aiwa.bridge.yourMineSphereUrl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,8 +18,11 @@ import kotlinx.coroutines.withContext
  * user reads it and presses "Sign & Submit" themself. A no-UI trampoline, like the other
  * buttons of the widget.
  *
- * The code also goes to the clipboard, always: a YourMine that does not yet know the hand-off
- * (its `#aiwa=` fragment is ignored there) simply opens, and the code is one paste away.
+ * The same button serves the "Aiwa" mode: what Claude sent is then a contract (name.aiwa.html) and
+ * the page opened is the Aiwa wallet, whose "Publish as yourself" form gets the name and the code.
+ *
+ * The code also goes to the clipboard, always: a page that does not yet know the hand-off
+ * (its fragment is ignored there) simply opens, and the code is one paste away.
  */
 class OpenSphereActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,11 +40,16 @@ class OpenSphereActivity : ComponentActivity() {
                 return@launch
             }
             copyToClipboard(this@OpenSphereActivity, sphere.code)
-            val url = yourMineSphereUrl(sphere.name, sphere.code)
-            val opened = openUrl(app, url ?: YOURMINE_URL)
+            val aiwa = sphere.kind == "aiwa"
+            val contract = sphere.name.removeSuffix(".aiwa.html")
+            val url = if (aiwa) aiwaContractUrl(contract, sphere.code) else yourMineSphereUrl(sphere.name, sphere.code)
+            val opened = openUrl(app, url ?: if (aiwa) AIWA_PROJECT_URL else YOURMINE_URL)
             toastOnMain(
                 app,
                 when {
+                    aiwa && !opened -> "App « $contract » copiée, mais rien n'a pu ouvrir la page Aiwa : ouvre-la et colle-la dans Actions → Smart contract."
+                    aiwa && url == null -> "App « $contract » copiée (trop grosse pour l'adresse) : sur la page Aiwa, Actions → Smart contract, colle-la."
+                    aiwa -> "App « $contract » envoyée à la page Aiwa : connecte ton wallet si besoin, elle t'attend dans Actions → Smart contract (copiée aussi)."
                     !opened -> "Sphère « ${sphere.name} » copiée, mais rien n'a pu ouvrir YourMine : ouvre-le et colle-la dans Build → Apps."
                     url == null -> "Sphère « ${sphere.name} » copiée (trop grosse pour l'adresse) : dans YourMine, Build → Apps, colle-la."
                     else -> "Sphère « ${sphere.name} » envoyée à YourMine — copiée aussi, au cas où le champ resterait vide."

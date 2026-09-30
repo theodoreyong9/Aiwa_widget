@@ -69,6 +69,11 @@ SPHERE_KEEP = 10
 SPHERE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,40}\.sphere\.js")
 SPHERE_KEY_RE = re.compile(r"YM_S\[\s*['\"]([^'\"]+\.sphere\.js)['\"]\s*\]")
 SPHERE_README = "https://raw.githubusercontent.com/theodoreyong9/YourMinedApp/main/README.md"
+# The Aiwa counterpart: what Claude writes in the "aiwa" mode is a contract, one self-contained
+# index.html, named name.aiwa.html here (the wallet page asks for a name, a version and the code).
+AIWA_FILE_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,40}\.aiwa\.html")
+AIWA_PROJECT = "https://raw.githubusercontent.com/theodoreyong9/aiwa_project/main"
+HTML_TITLE_RE = re.compile(r"<title[^>]*>([^<]{1,200})</title>", re.I)
 # The page the CLI prints to log in with a Claude account (inside terminal escape codes).
 LOGIN_URL_RE = re.compile(r"https://claude\.(?:com|ai)/[^\s\x07\x1b]*oauth/authorize[^\s\x07\x1b]*")
 # What the CLI says when it is not (or no longer) logged in.
@@ -108,12 +113,14 @@ cloud_busy = False
 # the plain chat); push_main: push straight to the main branch (otherwise
 # to a work branch); deploy_mode: none, pages (publish with GitHub Pages
 # through GitHub Actions), android (build the APK with GitHub Actions and
-# publish it as a GitHub release) or sphere (write a YourMine sphere and send it
-# to the phone, no GitHub); extra: free text. The alert instruction (ping the relay when you
+# publish it as a GitHub release), sphere (write a YourMine sphere and send it
+# to the phone, no GitHub) or aiwa (write an Aiwa contract — one self-contained
+# index.html — and send it to the phone, to be published from the Aiwa wallet page);
+# extra: free text. The alert instruction (ping the relay when you
 # wait for an answer) is always there — it is mandatory, not a switch.
 current_repo = None
 push_main = True
-DEPLOY_MODES = ("none", "pages", "android", "sphere")
+DEPLOY_MODES = ("none", "pages", "android", "sphere", "aiwa")
 deploy_mode = "none"
 # Other repositories Claude may ALSO work on (checked in the widget's picker):
 # told to it in the instructions; the platform decides whether it can reach them.
@@ -200,9 +207,10 @@ def _load_state():
         relay_cloud.update({k: checked.get(k) if isinstance(checked.get(k), (int, float)) else None for k in ("asked", "ok")})
     last = data.get("sphere")
     sphere = None
-    if isinstance(last, dict) and isinstance(last.get("name"), str) and SPHERE_NAME_RE.fullmatch(last["name"]):
+    if isinstance(last, dict) and isinstance(last.get("name"), str) and (SPHERE_NAME_RE.fullmatch(last["name"]) or AIWA_FILE_RE.fullmatch(last["name"])):
         sphere = {"name": last["name"], "size": int(last.get("size") or 0), "ts": int(last.get("ts") or 0),
-                  "seen": last.get("seen") is True, "event": last.get("event") if isinstance(last.get("event"), str) else None}
+                  "seen": last.get("seen") is True, "event": last.get("event") if isinstance(last.get("event"), str) else None,
+                  "kind": "aiwa" if last["name"].endswith(".aiwa.html") else "sphere"}
     handled = data.get("relay_seen")
     if isinstance(handled, dict):
         relay_seen.update(id=handled.get("id") if isinstance(handled.get("id"), str) else None,
@@ -500,6 +508,22 @@ def _instruction_lines(repo, work, base, direct):
             "(un seul fichier par envoi ; si je te demande une correction, renvoie le fichier complet de la même façon ; "
             "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait la sphère et ce qu'elle montre sur les profils.",
         ))
+    if deploy == "aiwa":
+        lines.append((
+            "deploy",
+            "Déploiement (Aiwa) : le livrable est UNE app Aiwa, un contrat intelligent : un fichier `nom.aiwa.html` (nom en minuscules, chiffres et tirets), "
+            "c'est-à-dire un `index.html` complet et autonome. Il s'exécute dans une iframe isolée (`sandbox=\"allow-scripts\"`, sans `allow-same-origin` : "
+            "origine opaque, aucun accès à mon identité ni au stockage de la page qui l'ouvre) ; toutes ses dépendances viennent d'une URL (import map vers les fichiers de "
+            "https://theodoreyong9.github.io/Aiwa_project/node_modules/ ou un CDN comme esm.sh), jamais de fichiers locaux. "
+            f"Lis avant d'écrire : le README {AIWA_PROJECT}/README.md (section « Publish a contract »), l'exemple {AIWA_PROJECT}/examples/channel-contract.html "
+            f"et le yellow paper {AIWA_PROJECT}/YELLOWPAPER.md (le protocole : identité, journal d'événements, contrats, délégation, bons au porteur) ; "
+            "ce que le contrat fait avec aiwa-lib (`defineContract`, `Contract`, `signedAction`…) doit correspondre à ce que ces documents décrivent, pas à ce que tu supposes. "
+            "Ne le pousse sur AUCUN dépôt : je le publie moi-même, avec mon identité Aiwa, depuis la page du wallet. Quand il est prêt, vérifie-le (charge-le dans un navigateur headless, "
+            "console sans erreur ; les modules de github.io peuvent être inaccessibles depuis ta session : dis-le-moi alors, et ce que tu as pu vérifier quand même), puis envoie-le sur mon téléphone "
+            f"avec cette commande, telle quelle : `curl -s -m 60 -T nom.aiwa.html -H 'Filename: nom.aiwa.html' -H 'Title: aiwa-app' {NTFY_SERVER}/{topic}` "
+            "(un seul fichier par envoi ; si je te demande une correction, renvoie le fichier complet de la même façon ; "
+            "si le réseau bloque la commande, dis-le-moi et colle le code dans ta réponse). Dis-moi ensuite en une phrase ce que fait l'app.",
+        ))
     # Mandatory, not a switch: it is how the widget learns that Claude is
     # waiting (the CLI can't read a cloud reply back). A public relay, a
     # random topic; the command is harmless when the network blocks it.
@@ -785,13 +809,14 @@ def _site_snapshot():
     advance, and whether it answers: off (no repository), waiting or live.
     kind "site": the GitHub Pages address (https://<owner>.github.io/<repo>/);
     kind "apk": with the Android mode, the download address of the APK in the
-    rolling release; kind "sphere": no address, "live" once a sphere sent by
-    Claude has not been opened yet. Probed in the background; this is called
+    rolling release; kind "sphere" / "aiwa": no address, "live" once what Claude
+    sent for that mode has not been opened yet. Probed in the background; this is called
     on every /api/status."""
     with lock:
         repo, mode, last = current_repo, deploy_mode, sphere
-    if mode == "sphere":
-        return {"url": None, "state": "live" if last and not last["seen"] else "waiting", "kind": "sphere"}
+    if mode in ("sphere", "aiwa"):
+        # What was sent must be what this mode asked for (a sphere is no answer to "aiwa").
+        return {"url": None, "state": "live" if last and not last["seen"] and last["kind"] == mode else "waiting", "kind": mode}
     if not repo:
         return {"url": None, "state": "off", "kind": "site"}
     kind = "apk" if mode == "android" else "site"
@@ -1143,9 +1168,23 @@ def _sphere_name(name, code):
     return "sphere.sphere.js"
 
 
-def _sphere_received(event):
-    """A sphere Claude sent (`curl -T name.sphere.js … Title: aiwa-sphere`): ntfy turns
-    the file into an attachment, which is downloaded here and kept."""
+def _slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40].strip("-")
+
+
+def _aiwa_name(name, code):
+    """The Aiwa contract's file name: the one it was sent under, else its <title>."""
+    if AIWA_FILE_RE.fullmatch(name or ""):
+        return name
+    found = HTML_TITLE_RE.search(code)
+    slug = _slug(found.group(1)) if found else ""
+    return f"{slug or 'app'}.aiwa.html"
+
+
+def _sphere_received(event, kind="sphere"):
+    """A sphere (kind "sphere": `curl -T name.sphere.js … Title: aiwa-sphere`) or an Aiwa
+    contract (kind "aiwa": `curl -T name.aiwa.html … Title: aiwa-app`) Claude sent: ntfy
+    turns the file into an attachment, which is downloaded here and kept."""
     global sphere
     attachment = event.get("attachment") if isinstance(event.get("attachment"), dict) else None
     try:
@@ -1167,24 +1206,25 @@ def _sphere_received(event):
     except (OSError, ValueError) as err:  # UnicodeDecodeError is a ValueError
         print(f"[{_ts()}] sphere from the relay not kept: {err}", flush=True)
         return
-    name = _sphere_name(sent_name, code)
+    name = _aiwa_name(sent_name, code) if kind == "aiwa" else _sphere_name(sent_name, code)
     try:
         SPHERE_DIR.mkdir(parents=True, exist_ok=True)
         (SPHERE_DIR / name).write_text(code, encoding="utf-8")
-        for old in sorted(SPHERE_DIR.glob("*.sphere.js"), key=lambda f: f.stat().st_mtime, reverse=True)[SPHERE_KEEP:]:
-            old.unlink()
+        for pattern in ("*.sphere.js", "*.aiwa.html"):
+            for old in sorted(SPHERE_DIR.glob(pattern), key=lambda f: f.stat().st_mtime, reverse=True)[SPHERE_KEEP:]:
+                old.unlink()
     except OSError as err:
         print(f"[{_ts()}] sphere could not be saved: {err}", flush=True)
         return
     with lock:
-        sphere = {"name": name, "size": len(code.encode("utf-8")), "ts": int(time.time()), "seen": False, "event": event.get("id")}
+        sphere = {"name": name, "size": len(code.encode("utf-8")), "ts": int(time.time()), "seen": False, "event": event.get("id"), "kind": kind}
         _save_state()
-    print(f"[{_ts()}] sphere received from the relay: {name} ({len(code)} chars)", flush=True)
+    print(f"[{_ts()}] {kind} received from the relay: {name} ({len(code)} chars)", flush=True)
 
 
 def _sphere_snapshot():
     with lock:
-        return {k: sphere[k] for k in ("name", "size", "ts", "seen")} if sphere else None
+        return {k: sphere[k] for k in ("name", "size", "ts", "seen", "kind")} if sphere else None
 
 
 def _sphere_code():
@@ -1196,7 +1236,7 @@ def _sphere_code():
         code = (SPHERE_DIR / last["name"]).read_text(encoding="utf-8")
     except OSError:
         return {"ok": False, "error": "le fichier de la sphère est introuvable"}
-    return {"ok": True, "name": last["name"], "code": code}
+    return {"ok": True, "name": last["name"], "code": code, "kind": last["kind"]}
 
 
 def _sphere_seen():
@@ -1208,7 +1248,8 @@ def _sphere_seen():
 
 def _relay_event(event):
     """One message of the relay topic: a sphere (title aiwa-sphere, or a *.sphere.js
-    attachment), the relay test (title aiwa-check) or Claude's "I wait for you" ping."""
+    attachment), an Aiwa contract (title aiwa-app, or a *.aiwa.html attachment), the relay
+    test (title aiwa-check) or Claude's "I wait for you" ping."""
     now = time.time()
     with lock:
         if event.get("id") and event.get("id") == relay_seen["id"]:
@@ -1217,12 +1258,13 @@ def _relay_event(event):
         _save_state()
     title = str(event.get("title") or "")
     attachment = event.get("attachment")
-    named_sphere = isinstance(attachment, dict) and str(attachment.get("name") or "").endswith(".sphere.js")
+    attached = str(attachment.get("name") or "") if isinstance(attachment, dict) else ""
+    kind = "aiwa" if title == "aiwa-app" or attached.endswith(".aiwa.html") else "sphere" if title == "aiwa-sphere" or attached.endswith(".sphere.js") else None
     if title == "aiwa-check":
         _cloud_check_seen()
-    elif title == "aiwa-sphere" or named_sphere:
+    elif kind:
         if sphere is None or sphere.get("event") != event.get("id"):
-            threading.Thread(target=_sphere_received, args=(event,), daemon=True).start()
+            threading.Thread(target=_sphere_received, args=(event, kind), daemon=True).start()
     else:
         text = str(event.get("message", ""))
         if isinstance(event.get("time"), int) and now - event["time"] > 120:

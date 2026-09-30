@@ -106,6 +106,7 @@ private fun deployLabel(mode: String) = when (mode) {
     "pages" -> "Pages ▾"
     "android" -> "Android ▾"
     "sphere" -> "Sphère ▾"
+    "aiwa" -> "Aiwa ▾"
     else -> "Deploy ▾"
 }
 
@@ -197,9 +198,11 @@ private fun FullContent(state: AiwaState) {
     val needsSetup = !hasTermuxPermission(LocalContext.current)
     // The CLI is not logged in to a Claude account: nothing can be sent until it is.
     val needsLogin = state.claudeLogin == "needed"
-    // The Deploy chip is on "Sphère": a sphere Claude sent is waiting to be opened in YourMine.
-    val sphereMode = state.deploy == "sphere"
-    val sphereReady = sphereMode && state.sphere?.seen == false
+    // "Sphère" and "Aiwa" both end with something Claude sends to the phone (a sphere for YourMine, a
+    // contract for the Aiwa wallet page): when it has come and was not opened yet, it is waiting.
+    val aiwaMode = state.deploy == "aiwa"
+    val sphereMode = state.deploy == "sphere" || aiwaMode
+    val sphereReady = sphereMode && state.sphere?.seen == false && state.sphere?.kind == state.deploy
     // Claude's cloud environment does not reach the relay: the alert "Claude attend" can't come.
     val relayHint = state.relayCloud == "missing" && hasSession && !relayHintDismissed(LocalContext.current)
     val status: String
@@ -212,7 +215,11 @@ private fun FullContent(state: AiwaState) {
         needsLogin -> { status = "⚠ Claude n'est pas connecté — touche ici"; statusColor = alertText; statusBold = true }
         state.status == AiwaState.Status.WORKING -> { status = "Envoi en cours…"; statusColor = fg }
         state.waiting -> { status = "● Claude attend ta réponse"; statusColor = alertText; statusBold = true }
-        sphereReady -> { status = "⬡ Sphère prête : touche ⬡ pour l'ouvrir"; statusColor = fg; statusBold = true }
+        sphereReady -> {
+            status = if (aiwaMode) "App Aiwa prête : touche le bouton A pour la publier" else "⬡ Sphère prête : touche ⬡ pour l'ouvrir"
+            statusColor = fg
+            statusBold = true
+        }
         relayHint -> { status = "Prêt · alertes cloud bloquées — touche ici"; statusColor = warm }
         else -> { status = "Prêt"; statusColor = subtle }
     }
@@ -328,8 +335,8 @@ private fun FullContent(state: AiwaState) {
                     // Orange = a sphere Claude sent is waiting; grey = none (yet). It opens YourMine on
                     // Build → Apps with the code in the field (OpenSphereActivity).
                     RoundButton(
-                        icon = R.drawable.ic_sphere,
-                        description = "Ouvrir la sphère dans YourMine",
+                        icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
+                        description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
                         background = if (sphereReady) claudeOrange else pill,
                         action = actionStartActivity<OpenSphereActivity>(),
                         diameter = chipH.dp,
@@ -355,8 +362,10 @@ private fun FullContent(state: AiwaState) {
         }
         // The main action, big: dictate. The grey button with its red recording dot.
         Row(modifier = GlanceModifier.fillMaxWidth().defaultWeight(), verticalAlignment = Alignment.CenterVertically) {
+            // In the "Aiwa" mode the mic makes room, on its right, for the two reference documents:
+            // the yellow paper (the protocol) and the PDF of Jobber's docs.
             Box(
-                modifier = GlanceModifier.fillMaxWidth().height(micH.dp)
+                modifier = (if (aiwaMode) GlanceModifier.defaultWeight() else GlanceModifier.fillMaxWidth()).height(micH.dp)
                     .background(micGrey)
                     .cornerRadius((micH / 2).dp)
                     .clickable(actionStartActivity<DictateActivity>()),
@@ -369,8 +378,26 @@ private fun FullContent(state: AiwaState) {
                         modifier = GlanceModifier.size(16.dp),
                     )
                     Spacer(GlanceModifier.width(8.dp))
-                    Text("Dicter un message", style = TextStyle(color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                    Text(if (aiwaMode) "Dicter" else "Dicter un message", style = TextStyle(color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
                 }
+            }
+            if (aiwaMode) {
+                Spacer(GlanceModifier.width(GAP.dp))
+                RoundButton(
+                    icon = R.drawable.ic_paper,
+                    description = "Yellow paper : la spécification du protocole Aiwa",
+                    background = pill,
+                    action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(YELLOWPAPER_URL))),
+                    diameter = micH.dp,
+                )
+                Spacer(GlanceModifier.width(GAP.dp))
+                RoundButton(
+                    icon = R.drawable.ic_pdf,
+                    description = "PDF de Jobber : value-ontology",
+                    background = pill,
+                    action = actionStartIntent(Intent(Intent.ACTION_VIEW, Uri.parse(JOBBER_PDF_URL))),
+                    diameter = micH.dp,
+                )
             }
         }
     }
@@ -404,8 +431,9 @@ private fun CompactContent(state: AiwaState) {
     // sits there looks broken.
     val needsSetup = !hasTermuxPermission(LocalContext.current)
     val needsLogin = state.claudeLogin == "needed"
-    val sphereMode = state.deploy == "sphere"
-    val sphereReady = sphereMode && state.sphere?.seen == false
+    val aiwaMode = state.deploy == "aiwa"
+    val sphereMode = state.deploy == "sphere" || aiwaMode
+    val sphereReady = sphereMode && state.sphere?.seen == false && state.sphere?.kind == state.deploy
     val sessionLabel = when {
         needsSetup -> "Autoriser Aiwa"
         state.backend == "starting" -> "⏳ Démarrage"
@@ -543,8 +571,8 @@ private fun CompactContent(state: AiwaState) {
                     if (showSphere) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         RoundButton(
-                            icon = R.drawable.ic_sphere,
-                            description = "Ouvrir la sphère dans YourMine",
+                            icon = if (aiwaMode) R.drawable.ic_aiwa else R.drawable.ic_sphere,
+                            description = if (aiwaMode) "Publier l'app dans Aiwa" else "Ouvrir la sphère dans YourMine",
                             background = if (sphereReady) claudeOrange else pill,
                             action = actionStartActivity<OpenSphereActivity>(),
                         )

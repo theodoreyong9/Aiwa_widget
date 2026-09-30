@@ -6,10 +6,11 @@ package com.aiwa.bridge
 // sent by Claude has not been opened yet).
 data class SiteInfo(val url: String?, val state: String, val kind: String = "site")
 
-// A YourMine sphere Claude sent to the phone (its source: ClaudeBridge.sphereCode).
-// seen: it was opened in YourMine already.
-data class SphereInfo(val name: String, val size: Int, val ts: Long, val seen: Boolean)
-data class SphereCode(val name: String, val code: String)
+// What Claude sent to the phone (its source: ClaudeBridge.sphereCode): kind "sphere" is a YourMine
+// sphere (name.sphere.js), kind "aiwa" an Aiwa contract (name.aiwa.html, one self-contained
+// index.html). seen: it was opened in YourMine / on the Aiwa wallet page already.
+data class SphereInfo(val name: String, val size: Int, val ts: Long, val seen: Boolean, val kind: String = "sphere")
+data class SphereCode(val name: String, val code: String, val kind: String = "sphere")
 
 // The `claude auth login` the backend runs for the app. phase: idle / starting / url (the
 // page to open is there, a code is awaited) / checking / done / failed; message: what the
