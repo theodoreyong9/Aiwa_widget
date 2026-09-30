@@ -399,6 +399,32 @@ class HealthActivity : ComponentActivity() {
 }
 
 /**
+ * "Where do I open it?": in the "Aiwa" mode, what Claude sent is a contract that is also a YourMine sphere
+ * (generated from it). The Aiwa wallet page gets the contract (HTML), YourMine gets the sphere (JS).
+ */
+class SphereTargetPickerActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        wakeAiwa(applicationContext)
+        setContent {
+            val state by AiwaRepository.state.collectAsState()
+            val name = state.sphere?.name?.removeSuffix(".aiwa.html") ?: "l'app"
+            val entries = buildList {
+                add(PickerEntry("« $name » : où l'ouvrir ?", false, header = true) { })
+                add(PickerEntry("Page Aiwa — le contrat (HTML), à publier avec ton identité", false, lines = 3) { go(TARGET_AIWA) })
+                add(PickerEntry("YourMine — la sphère (JS), générée du même code", false, lines = 3) { go(TARGET_YOURMINE) })
+            }
+            PickerSheet(entries) { finish() }
+        }
+    }
+
+    private fun go(target: String) {
+        startActivity(Intent(this, OpenSphereActivity::class.java).putExtra(EXTRA_TARGET, target))
+        finish()
+    }
+}
+
+/**
  * The documents of the "Aiwa" mode (DOC_CHOICES): the round button next to the mic opens this list, one
  * entry opens one document in the browser (the PDFs are files: the browser downloads them and offers to
  * open them). One button and a list rather than one button per document.

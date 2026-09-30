@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Counter example</title>
+<meta name="description" content="A counter with a fresh Aiwa identity: the smallest contract that also runs as a YourMine sphere.">
+<meta name="aiwa-icon" content="🔢">
+<!--
+  THE SHAPE OF AN AIWA CONTRACT THAT IS ALSO A YOURMINE SPHERE (this file is named counter-example.aiwa.html).
+  The Aiwa wallet page publishes it as it is, and runs it standalone. Aiwa generates the YourMine sphere from
+  THIS SAME FILE (no second file to write): the sphere reads the import map, the style and the logic script
+  below and runs the logic inside its own panel. So:
+   - the import map is the contract's dependencies; every import in the logic uses a bare name from it or an
+     ABSOLUTE url (never a relative path: a YourMine panel has no folder to be relative to);
+   - every CSS rule starts with the root class `.aiwa-` + the file's name (here `.aiwa-counter-example`):
+     no rule on body, html, * or :root, which would leak into YourMine;
+   - the page holds only <div id="app" class="aiwa-counter-example">, and ONE inline <script type="module"
+     id="aiwa-logic"> that builds the whole UI into the container it is given;
+   - `export function mount(container, host)`: use container.querySelector, never document.getElementById or a
+     global id; keep no state on window; return a function that undoes what mount did (removes timers, listeners);
+   - host.kind is "aiwa" on the wallet page and "yourmine" inside a sphere (then host.ctx is YourMine's sphere
+     context: storage, p2p, profile…; use it with optional chaining, it is absent on the Aiwa page);
+   - the last line starts the contract by itself when nothing hosts it.
+-->
+<script type="importmap">
+{ "imports": {
+  "aiwa-core": "https://theodoreyong9.github.io/Aiwa_project/node_modules/aiwa-core/src/index.js",
+  "@noble/curves/": "https://theodoreyong9.github.io/Aiwa_project/node_modules/@noble/curves/",
+  "@noble/hashes/": "https://theodoreyong9.github.io/Aiwa_project/node_modules/@noble/hashes/",
+  "@scure/bip39": "https://theodoreyong9.github.io/Aiwa_project/node_modules/@scure/bip39/index.js",
+  "@scure/bip39/": "https://theodoreyong9.github.io/Aiwa_project/node_modules/@scure/bip39/"
+} }
+</script>
+<style>
+  .aiwa-counter-example { font: 14px/1.5 system-ui, sans-serif; padding: 14px; }
+  .aiwa-counter-example .count { font-size: 32px; font-weight: 700; margin: 8px 0; }
+  .aiwa-counter-example button { padding: 6px 14px; }
+  .aiwa-counter-example .id { font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; opacity: .7; }
+</style>
+</head>
+<body>
+<div id="app" class="aiwa-counter-example"></div>
+<script type="module" id="aiwa-logic">
+import { generateIdentity } from 'aiwa-core';
+
+export async function mount(container, host) {
+  container.innerHTML = `
+    <div>Hosted by: <b data-role="host"></b></div>
+    <div class="count" data-role="count">0</div>
+    <button data-role="plus">+1</button>
+    <div class="id" data-role="id">identity…</div>`;
+  const $ = (role) => container.querySelector(`[data-role="${role}"]`);
+  $('host').textContent = host.kind;
+  let count = 0;
+  const onClick = () => { $('count').textContent = String(++count); };
+  $('plus').addEventListener('click', onClick);
+  const identity = await generateIdentity(); // a real, fresh Aiwa identity (from aiwa-core)
+  $('id').textContent = identity.id;
+  return () => { $('plus')?.removeEventListener('click', onClick); container.innerHTML = ''; };
+}
+
+if (!globalThis.__AIWA_HOST__) mount(document.getElementById('app'), { kind: 'aiwa' });
+</script>
+</body>
+</html>
