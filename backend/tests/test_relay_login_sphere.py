@@ -273,10 +273,9 @@ class AiwaContractTests(Base):
         srv.deploy_mode = "aiwa"
         text = dict(srv._instruction_lines(None, None, None, True))["deploy"]
         for wanted in ("-T nom.aiwa.html", "Title: aiwa-app", f"{srv.NTFY_SERVER}/{srv.waiting_topic}", "YELLOWPAPER.md",
-                       "channel-contract.html", "Ne le pousse sur AUCUN dépôt", "defineContract",
-                       # the contract must also run as a YourMine sphere, which the Aiwa page generates
-                       # AFTER publishing (pinned to the published contract): the shape it must have
-                       "aiwa-contract-example.html", "Tu n'écris donc PAS de `.sphere.js`", "AUCUNE copie du code", 'id="aiwa-logic"',
+                       "Ne le pousse sur AUCUN dépôt", "defineContract",
+                       # the contract runs on the Aiwa page, in an isolated frame: the shape it must have
+                       "aiwa-contract-example.html", 'id="aiwa-logic"',
                        "mount(container, host)", "__AIWA_HOST__", "host.kind", "`.aiwa-` + le nom du fichier", "aiwa-icon"):
             self.assertIn(wanted, text)
         self.assertIn("raw.githubusercontent.com/theodoreyong9/aiwa_project/main/", text)

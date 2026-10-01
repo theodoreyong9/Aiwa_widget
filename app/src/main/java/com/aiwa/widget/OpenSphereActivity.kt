@@ -53,7 +53,7 @@ class OpenSphereActivity : ComponentActivity() {
                 when {
                     aiwa && !opened -> "App « $contract » copiée, mais rien n'a pu ouvrir la page Aiwa : ouvre-la et colle-la dans l'onglet Contract."
                     aiwa && url == null -> "App « $contract » copiée (trop grosse pour l'adresse) : sur la page Aiwa, onglet Contract, colle-la."
-                    aiwa -> "App « $contract » envoyée à la page Aiwa : connecte ton wallet si besoin, publie-la dans l'onglet Contract, la page te donnera ensuite la sphère YourMine (contrat copié aussi)."
+                    aiwa -> "App « $contract » envoyée à la page Aiwa : connecte ton wallet si besoin, publie-la dans l'onglet Contract (contrat copié aussi)."
                     !opened -> "Sphère « ${sphere.name} » copiée, mais rien n'a pu ouvrir YourMine : ouvre-le et colle-la dans Build → Apps."
                     url == null -> "Sphère « ${sphere.name} » copiée (trop grosse pour l'adresse) : dans YourMine, Build → Apps, colle-la."
                     else -> "Sphère « ${sphere.name} » envoyée à YourMine — copiée aussi, au cas où le champ resterait vide."
