@@ -201,6 +201,9 @@ class RepoPickerActivity : ComponentActivity() {
             }
             val entries = buildList {
                 add(PickerEntry("Aucun dépôt (chat libre)", state.repo == null) { pickRepo(null) })
+                // Right under the first line, not after a list that can run to a hundred names. The new repository shows up in
+                // the list when this window is opened again (the backend re-reads the owner's list when it is older than 30 s).
+                add(PickerEntry("＋  Créer un dépôt GitHub ↗  (coche « Add a README » pour qu'il ne soit pas vide)", false) { openNewRepoPage() })
                 val list = repos
                 if (list == null) {
                     add(PickerEntry(if (starting) "Démarrage du backend (Termux)… quelques secondes" else "Chargement des dépôts…", false) { })
@@ -219,7 +222,7 @@ class RepoPickerActivity : ComponentActivity() {
                 // settings: Aiwa never logs in to GitHub and cannot tell whether it is
                 // connected. So ONE entry, which opens the page of Claude's connectors —
                 // it shows the real state and offers Connect or Disconnect accordingly.
-                add(PickerEntry("🔗  Connexion GitHub de Claude : connecter, changer, déconnecter ↗", false) { openClaudeSettings(CLAUDE_CONNECTORS_URL) })
+                add(PickerEntry("🔗  Connexion GitHub de Claude : connecter, changer, déconnecter ↗", false) { openPage(CLAUDE_CONNECTORS_URL) })
             }
             PickerSheet(entries) { finish() }
         }
@@ -236,11 +239,16 @@ class RepoPickerActivity : ComponentActivity() {
         finish()
     }
 
-    private fun openClaudeSettings(url: String) {
+    private fun openPage(url: String) {
         if (!openUrl(applicationContext, url)) toastOnMain(applicationContext, "Impossible d'ouvrir le navigateur.")
         finish()
     }
+
+    private fun openNewRepoPage() = openPage(GITHUB_NEW_REPO_URL)
 }
+
+// GitHub's own page for creating a repository (the browser is logged in there, Aiwa never is).
+private const val GITHUB_NEW_REPO_URL = "https://github.com/new"
 
 // Claude's list of connectors: GitHub is connected, switched to another account or
 // disconnected there, and the page shows which of those applies.

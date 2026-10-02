@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.request
 from pathlib import Path
 
@@ -637,6 +638,63 @@ class CiNewsTests(unittest.TestCase):
     def test_the_detail_says_which_run_it_is(self):
         FakeGithub.runs = [run(1, "S1", name="Build Aiwa APK", title="Sphere instruction", event="push", actor="theodoreyong9")]
         self.assertEqual(gh.latest_run("o/r")["detail"], "Build Aiwa APK — Sphere instruction (push, theodoreyong9)")
+
+
+class RepoListTests(unittest.TestCase):
+    """The repository picker's list, and a repository created a moment ago ("Créer un dépôt GitHub") showing up in it."""
+
+    def setUp(self):
+        gh._owner_cache.clear()
+        with srv.site_lock:
+            srv.ci_lookups.clear()
+        self.reads = []
+        self.listing = [{"full_name": "me/old"}]
+
+        class Reply:
+            def __init__(inner, data):
+                inner.data = data
+
+            def __enter__(inner):
+                return inner
+
+            def __exit__(inner, *args):
+                return False
+
+            def read(inner, *args):
+                return json.dumps(inner.data).encode()
+
+        def fake_urlopen(request, timeout=None):
+            self.reads.append(request.full_url)
+            return Reply(self.listing)
+
+        self.patch = unittest.mock.patch.object(gh.urllib.request, "urlopen", fake_urlopen)
+        self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop()
+        gh._owner_cache.clear()
+        with srv.site_lock:
+            srv.ci_lookups.clear()
+
+    def test_a_new_repository_is_in_the_list_when_the_picker_is_opened_again(self):
+        self.assertEqual([r["name"] for r in srv._owner_repos_current("me")], ["me/old"])
+        self.listing = [{"full_name": "me/new"}, {"full_name": "me/old"}]
+        self.assertEqual([r["name"] for r in srv._owner_repos_current("me")], ["me/old"], "opened twice within 30 s: no new request")
+        self.assertEqual(len(self.reads), 1)
+        gh._owner_cache["me"] = (time.time() - 31, gh._owner_cache["me"][1])
+        self.assertEqual([r["name"] for r in srv._owner_repos_current("me")], ["me/new", "me/old"], "30 s later it is read again")
+        self.assertEqual(len(self.reads), 2)
+
+    def test_the_re_reads_count_in_the_hourly_budget_and_stop_when_it_is_spent(self):
+        srv._owner_repos_current("me")
+        self.assertEqual(len(srv.ci_lookups), 1, "a read is a request of the unauthenticated API: counted")
+        now = time.time()
+        with srv.site_lock:
+            srv.ci_lookups[:] = [now - 10 * i for i in range(srv.CI_LOOKUPS_PER_HOUR)]
+        gh._owner_cache["me"] = (now - 60, gh._owner_cache["me"][1])
+        self.listing = [{"full_name": "me/new"}]
+        self.assertEqual([r["name"] for r in srv._owner_repos_current("me")], ["me/old"], "out of budget: the list already held is used")
+        self.assertEqual(len(self.reads), 1)
 
 
 class HttpTests(Base):

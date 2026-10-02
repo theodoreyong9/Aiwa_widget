@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 17
+BACKEND_VERSION = 18
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -959,6 +959,22 @@ def _ci_acknowledge():
             _save_state()
 
 
+# A repository created a moment ago (from the picker's "Créer un dépôt GitHub") must be in the list when the picker is opened
+# again, so an owner's list is read again once it is 30 s old. Each re-read is one of the unauthenticated API's 60 requests an
+# hour, counted with the CI lookups (they share the budget); out of budget, the list already held is used.
+REPO_LIST_MAX_AGE = 30
+
+
+def _owner_repos_current(owner):
+    with site_lock:
+        if github.owner_cache_age(owner) >= REPO_LIST_MAX_AGE and _ci_lookup_allowed():
+            ci_lookups.append(time.time())
+            max_age = REPO_LIST_MAX_AGE
+        else:
+            max_age = 600
+    return github.owner_repos(owner, max_age=max_age)
+
+
 def _repo_choices():
     """Known repositories first (most recently used), then the ones a
     connected `gh` knows about, if there is one."""
@@ -979,7 +995,7 @@ def _repo_choices():
         if owner and owner not in owners:
             owners.append(owner)
     for owner in owners[:3]:
-        for item in github.owner_repos(owner):
+        for item in _owner_repos_current(owner):
             offer(item)
     for item in github.gh_repos():
         offer(item)

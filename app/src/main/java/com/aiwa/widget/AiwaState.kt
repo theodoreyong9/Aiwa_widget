@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 // Bump together with BACKEND_VERSION in backend/aiwa_server.py whenever
 // the app starts relying on a new backend feature.
-const val EXPECTED_BACKEND_VERSION = 17
+const val EXPECTED_BACKEND_VERSION = 18
 
 data class ModelChoice(val id: String?, val label: String)
 

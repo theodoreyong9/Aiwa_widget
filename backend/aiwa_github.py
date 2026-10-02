@@ -110,12 +110,18 @@ def site_answers(url, ranged=False):
 _owner_cache = {}
 
 
-def owner_repos(owner):
+def owner_cache_age(owner):
+    """Seconds since the list of `owner` was read; infinite if it never was."""
+    cached = _owner_cache.get(owner)
+    return time.time() - cached[0] if cached else float("inf")
+
+
+def owner_repos(owner, max_age=600):
     """The PUBLIC repositories of a GitHub user or organization, most
     recently pushed first: a plain unauthenticated web request (public
-    data, no token). Cached ten minutes."""
+    data, no token). Cached ten minutes, or `max_age` seconds."""
     cached = _owner_cache.get(owner)
-    if cached and time.time() - cached[0] < 600:
+    if cached and time.time() - cached[0] < max_age:
         return cached[1]
     try:
         request = urllib.request.Request(
