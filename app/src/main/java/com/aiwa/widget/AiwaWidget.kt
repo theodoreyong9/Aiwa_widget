@@ -21,6 +21,7 @@ import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 // The Intent overload of actionStartActivity lives in the appwidget module.
 import androidx.glance.appwidget.action.actionStartActivity as actionStartIntent
+import androidx.glance.appwidget.CircularProgressIndicator
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -42,7 +43,8 @@ import kotlinx.coroutines.flow.sample
 // on the card, while Claude waits for an answer). Project, when the widget is
 // tall enough: [repository ▾] [Push main / branche] [Deploy] and the round
 // buttons for the site (globe) and the GitHub Actions (their colour is how the
-// last run went), or the mint "Prêt" once a new green run is there.
+// last run went), the badge on the dictation button (a spinning circle while work is under way, a green tick once there
+// is a new green run to look at).
 // EVERYTHING IS ALWAYS THERE at any width the widget can be resized to: the
 // weighted chips (session, repository) give way, their text cut to what fits,
 // nothing is dropped. No conversation text: a cloud session's replies can't be
@@ -79,6 +81,29 @@ class AiwaWidget : GlanceAppWidget() {
 // in compiles but crashes at real render time on device. Wrapping in
 // Compose's own Color(Int) first is the real fix (confirmed live).
 private fun rgb(colorInt: Int) = ColorProvider(androidx.compose.ui.graphics.Color(colorInt))
+
+// What the dictation button says about the work, in place of the old mint "● Prêt ↗" pill: a spinning circle while a
+// request is under way (being sent, or the repository's GitHub run is going), a green tick when there is something new
+// to look at (a new green run). Tapping the tick opens the result — it is then no longer news. Nothing otherwise.
+private fun micBadgeShown(state: AiwaState) =
+    state.status == AiwaState.Status.WORKING || state.ciState == "running" || state.ciFresh
+
+@Composable
+private fun MicBadge(state: AiwaState, size: Dp = 22.dp) {
+    val tickGreen = rgb(android.graphics.Color.rgb(46, 190, 110))
+    val working = state.status == AiwaState.Status.WORKING || state.ciState == "running"
+    if (working) {
+        CircularProgressIndicator(modifier = GlanceModifier.size(size), color = tickGreen)
+    } else if (state.ciFresh) {
+        Box(
+            modifier = GlanceModifier.size(size).background(tickGreen).cornerRadius((size.value / 2f).dp)
+                .clickable(actionStartActivity<OpenResultActivity>()),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("✓", style = TextStyle(color = rgb(android.graphics.Color.rgb(255, 255, 255)), fontSize = 14.sp, fontWeight = FontWeight.Bold))
+        }
+    }
+}
 
 private const val GAP = 6f
 
@@ -169,8 +194,6 @@ private fun FullContent(state: AiwaState) {
     val claudeOrange = rgb(android.graphics.Color.rgb(204, 120, 92))
     val alertRed = rgb(android.graphics.Color.rgb(214, 69, 65))
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
-    val mint = rgb(android.graphics.Color.rgb(221, 243, 230))
-    val mintText = rgb(android.graphics.Color.rgb(17, 51, 31))
     val size = LocalSize.current
     val fontScale = LocalContext.current.resources.configuration.fontScale
     // The card's own padding takes 10 dp on each side and 8 dp above and below.
@@ -246,23 +269,19 @@ private fun FullContent(state: AiwaState) {
     val repoText = "⎇ " + fitLabel(repoName ?: "Choisir un dépôt", half - textWidth("⎇  ▾", fontScale) - textWidth(extraSuffix, fontScale), fontScale) + extraSuffix + " ▾"
     val modelText = fitLabel(modelLabel(state.model), half - textWidth(" ▾", fontScale), fontScale) + " ▾"
 
-    // ---- band 3: Push, Deploy, and the site / Actions / "Prêt" -------------
-    val readyText = "● Prêt ↗"
+    // ---- band 3: Push, Deploy, and the site / Actions ---------------------
     val site = state.siteUrl
     val live = state.siteState == "live"
-    // A new green run the user hasn't seen: "Prêt" replaces the two round buttons
-    // (a green run is what it says).
-    val fresh = state.ciFresh
     // The address is known as soon as a repository is chosen
     // (https://<owner>.github.io/<repo>/): the globe is there once deployment is
     // asked for, or as soon as the address answers.
-    val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
-    val showSphere = hasRepo && !fresh && sphereMode
+    val showSite = hasRepo && site != null && (state.deploy != "none" || live)
+    val showSphere = hasRepo && sphereMode
     // In the Aiwa mode nothing is published through GitHub: the round "GitHub Actions" button (the build of this
     // repository) has no meaning there, and gives way to a button that shows the code Claude sent.
     val showCode = showSphere && aiwaMode
-    val showActions = hasRepo && !fresh && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
-    val fixed = if (fresh) GAP + chipWidth(readyText, fontScale) else (if (showSite) GAP + chipH else 0f) + (if (showSphere) GAP + chipH else 0f) + (if (showCode) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
+    val showActions = hasRepo && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
+    val fixed = (if (showSite) GAP + chipH else 0f) + (if (showSphere) GAP + chipH else 0f) + (if (showCode) GAP + chipH else 0f) + (if (showActions) GAP + chipH else 0f)
     val each = (avail - fixed - GAP) / 2f - 20f
     fun pick(full: String, short: String) = if (textWidth(full, fontScale) <= each) full else short
     val pushText = fitLabel(pick(if (state.pushMain) "Push main" else "Push branche", if (state.pushMain) "main" else "branche"), each, fontScale)
@@ -318,10 +337,6 @@ private fun FullContent(state: AiwaState) {
                 Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
                 Spacer(GlanceModifier.width(GAP.dp))
                 Chip(deployText, if (state.deploy != "none") green else pill, fg, actionStartActivity<DeployPickerActivity>(), GlanceModifier.defaultWeight(), alignStart = true, height = chipH.dp)
-                if (fresh) {
-                    Spacer(GlanceModifier.width(GAP.dp))
-                    Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true, height = chipH.dp)
-                }
                 if (showSite && site != null) {
                     Spacer(GlanceModifier.width(GAP.dp))
                     // Orange = the address answers; grey = not (yet) — it still opens.
@@ -393,6 +408,10 @@ private fun FullContent(state: AiwaState) {
                     )
                     Spacer(GlanceModifier.width(8.dp))
                     Text("Dicter un message", style = TextStyle(color = fg, fontSize = 14.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                    if (micBadgeShown(state)) {
+                        Spacer(GlanceModifier.width(10.dp))
+                        MicBadge(state)
+                    }
                 }
             }
             if (aiwaMode) {
@@ -419,8 +438,6 @@ private fun CompactContent(state: AiwaState) {
     val claudeOrange = rgb(android.graphics.Color.rgb(204, 120, 92))
     val alertRed = rgb(android.graphics.Color.rgb(214, 69, 65))
     val green = rgb(android.graphics.Color.rgb(46, 125, 90))
-    val mint = rgb(android.graphics.Color.rgb(221, 243, 230))
-    val mintText = rgb(android.graphics.Color.rgb(17, 51, 31))
     val size = LocalSize.current
     val fontScale = LocalContext.current.resources.configuration.fontScale
     // Room for the second row (two rows of buttons plus the padding).
@@ -491,11 +508,15 @@ private fun CompactContent(state: AiwaState) {
                     .clickable(actionStartActivity<DictateActivity>()),
                 contentAlignment = Alignment.Center,
             ) {
-                Image(
-                    provider = ImageProvider(R.drawable.rec_dot),
-                    contentDescription = "Dicter un message",
-                    modifier = GlanceModifier.size(16.dp),
-                )
+                if (micBadgeShown(state)) {
+                    MicBadge(state, 20.dp)
+                } else {
+                    Image(
+                        provider = ImageProvider(R.drawable.rec_dot),
+                        contentDescription = "Dicter un message",
+                        modifier = GlanceModifier.size(16.dp),
+                    )
+                }
             }
             Spacer(GlanceModifier.width(GAP.dp))
             Chip(modelText, pill, fg, actionStartActivity<ModelPickerActivity>())
@@ -528,24 +549,19 @@ private fun CompactContent(state: AiwaState) {
             val hasRepo = state.repo != null
             val pushText = if (state.pushMain) "Push main" else "Push branche"
             val deployText = deployLabel(state.deploy)
-            val readyText = "● Prêt ↗"
             val site = state.siteUrl
             val live = state.siteState == "live"
-            // A new green run the user hasn't seen: "Prêt" replaces the two round
-            // buttons (a green run is what it says).
-            val fresh = state.ciFresh
             // The address is known as soon as a repository is chosen
             // (https://<owner>.github.io/<repo>/): the globe is there once
             // deployment is asked for, or as soon as the address answers.
-            val showSite = hasRepo && !fresh && site != null && (state.deploy != "none" || live)
-            val showSphere = hasRepo && !fresh && sphereMode
+            val showSite = hasRepo && site != null && (state.deploy != "none" || live)
+            val showSphere = hasRepo && sphereMode
             // In the Aiwa mode nothing is published through GitHub: the round "GitHub Actions" button (the build of this
             // repository) has no meaning there, and gives way to a button that shows the code Claude sent.
             val showCode = showSphere && aiwaMode
-            val showActions = hasRepo && !fresh && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
+            val showActions = hasRepo && !aiwaMode && (publishesFromGithub(state.deploy) || state.ciState != null)
             var others = 0f
             if (hasRepo) others += GAP + chipWidth(pushText, fontScale) + GAP + chipWidth(deployText, fontScale)
-            if (hasRepo && fresh) others += GAP + chipWidth(readyText, fontScale)
             if (showSite) others += GAP + 34f
             if (showSphere) others += GAP + 34f
             if (showCode) others += GAP + 34f
@@ -564,10 +580,6 @@ private fun CompactContent(state: AiwaState) {
                     Chip(pushText, if (state.pushMain) green else pill, fg, actionRunCallback<TogglePushMainCallback>())
                     Spacer(GlanceModifier.width(GAP.dp))
                     Chip(deployText, if (state.deploy != "none") green else pill, fg, actionStartActivity<DeployPickerActivity>())
-                    if (fresh) {
-                        Spacer(GlanceModifier.width(GAP.dp))
-                        Chip(readyText, mint, mintText, actionStartActivity<OpenResultActivity>(), bold = true)
-                    }
                     if (showSite && site != null) {
                         Spacer(GlanceModifier.width(GAP.dp))
                         // Orange = the address answers; grey = not (yet) — it still opens.

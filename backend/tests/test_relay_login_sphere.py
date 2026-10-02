@@ -531,10 +531,32 @@ class CiNewsTests(unittest.TestCase):
             srv.ci_cache.update(repo=None, info=None, at=0.0, busy=False)
 
     def look(self):
-        """One look at the repository, as the backend does every 150 s."""
+        """One look at the repository, as the backend does every 30 or 150 s."""
         with srv.site_lock:
             srv.ci_cache.update(repo="o/r", info=gh.latest_run("o/r"), at=time.time(), busy=False)
         return srv._ci_snapshot()
+
+    def test_lookups_every_30_s_while_a_result_is_awaited_and_every_150_s_otherwise(self):
+        now = 10_000.0
+        idle, running, ok = None, {"state": "running"}, {"state": "success"}
+        srv.last_message_at = 0
+        self.assertEqual(srv._ci_ttl(ok, now), 150, "nothing awaited")
+        self.assertEqual(srv._ci_ttl(idle, now), 150)
+        self.assertEqual(srv._ci_ttl(running, now), 30, "a run is going")
+        srv.last_message_at = int(now) - 60
+        self.assertEqual(srv._ci_ttl(ok, now), 30, "a message was sent a minute ago: its result is awaited")
+        srv.last_message_at = int(now) - 601
+        self.assertEqual(srv._ci_ttl(ok, now), 150, "after 10 minutes it is not awaited any more")
+
+    def test_never_more_than_50_lookups_an_hour_whatever_the_rhythm(self):
+        now = 50_000.0
+        with srv.site_lock:
+            srv.ci_lookups[:] = [now - 10 * i for i in range(50)]      # 50 lookups in the last 500 s
+            self.assertFalse(srv._ci_lookup_allowed(now), "the budget is spent")
+            srv.ci_lookups[:] = [now - 3600 - 5] + [now - 10 * i for i in range(49)]
+            self.assertTrue(srv._ci_lookup_allowed(now), "one fell out of the hour: there is room again")
+            self.assertEqual(len(srv.ci_lookups), 49)
+            srv.ci_lookups.clear()
 
     def test_the_runs_of_one_commit_are_one_verdict(self):
         FakeGithub.runs = [run(3, "S2", name="Pages", status="in_progress"), run(2, "S2", name="Build"), run(1, "S1")]

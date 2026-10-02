@@ -49,7 +49,7 @@ HOST = "127.0.0.1"
 PORT = 8787
 # Bumped whenever the app starts depending on a new backend feature; the
 # app compares it (via /api/status) with the version it expects.
-BACKEND_VERSION = 16
+BACKEND_VERSION = 17
 # Passed to `claude --model` when a new cloud session is created, and to
 # `/model` in an existing one. Kept restrictive: it ends up as a
 # command-line argument / slash-command argument.
@@ -173,6 +173,14 @@ relay_seen = {"id": None, "time": None}
 site_lock = threading.Lock()
 site_cache = {"url": None, "state": "off", "at": 0.0, "busy": False}
 ci_cache = {"repo": None, "info": None, "at": 0.0, "busy": False}
+# How often the GitHub Actions of the current repository are looked up: every 30 s while a result is being waited for (a run
+# is going, or a message was sent through Aiwa less than 10 minutes ago), every 150 s otherwise. The unauthenticated API
+# allows 60 requests an hour whatever the rhythm, so the lookups of the last hour are counted and never go past 50.
+CI_POLL_FAST = 30
+CI_POLL_IDLE = 150
+CI_WATCH_SECONDS = 600
+CI_LOOKUPS_PER_HOUR = 50
+ci_lookups = []
 # repo -> the commit whose Actions runs the user was last told about (persisted): a
 # green commit that is not this one is news — "you can go and look".
 ci_seen = {}
@@ -883,11 +891,27 @@ def _ci_probe(repo):
         ci_cache.update(repo=repo, info=info if info is not None else (ci_cache["info"] if ci_cache["repo"] == repo else None), at=time.time(), busy=False)
 
 
+def _ci_ttl(info, now=None):
+    """Seconds between two lookups: CI_POLL_FAST while something is being waited for — a run is going, or a message was
+    sent through Aiwa less than CI_WATCH_SECONDS ago — CI_POLL_IDLE otherwise."""
+    now = time.time() if now is None else now
+    running = bool(info) and info.get("state") == "running"
+    awaited = bool(last_message_at) and now - last_message_at < CI_WATCH_SECONDS
+    return CI_POLL_FAST if running or awaited else CI_POLL_IDLE
+
+
+def _ci_lookup_allowed(now=None):
+    """Whether one more lookup fits in the hourly budget (call with site_lock held)."""
+    now = time.time() if now is None else now
+    ci_lookups[:] = [t for t in ci_lookups if now - t < 3600]
+    return len(ci_lookups) < CI_LOOKUPS_PER_HOUR
+
+
 def _ci_snapshot():
     """The verdict on the latest commit of the current repository's GitHub Actions ({"state",
     "url", "detail", "fresh"}, or None when unknown): see aiwa_github.latest_run. Public
-    data, looked up every 150 s (40 s while runs are going) — the unauthenticated API allows
-    only 60 requests an hour.
+    data, looked up every 30 s while a result is awaited and every 150 s otherwise (see
+    _ci_ttl) — the unauthenticated API allows only 60 requests an hour, so at most 50 an hour.
 
     fresh: there is something to go and look at — the commit's runs have all finished green,
     it is not the one the user was last told about, and they finished after the user's last
@@ -900,9 +924,10 @@ def _ci_snapshot():
     with site_lock:
         known = ci_cache["repo"] == repo
         info = ci_cache["info"] if known else None
-        ttl = 40 if info and info.get("state") == "running" else 150
-        if (not known or time.time() - ci_cache["at"] > ttl) and not ci_cache["busy"]:
+        ttl = _ci_ttl(info)
+        if (not known or time.time() - ci_cache["at"] > ttl) and not ci_cache["busy"] and _ci_lookup_allowed():
             ci_cache["busy"] = True
+            ci_lookups.append(time.time())
             threading.Thread(target=_ci_probe, args=(repo,), daemon=True).start()
     if not info:
         return None
